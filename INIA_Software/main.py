@@ -18,6 +18,8 @@ from excel_writer import (
     recalculate_excel_with_xlwings,
 )
 
+from excel_to_pdf import export_excel_sheets_to_pdf
+
 from report_runner import generate_pdf_report
 
 from su_pdf_finder import (
@@ -37,7 +39,7 @@ def parse_args():
         description=(
             "Full fertilizer workflow: build Excel from RESULTADOS + template, "
             "read requirements, optimize fertilizer doses, write final Excel, "
-            "generate report PDF, and copy original SU PDF reports."
+            "export Excel sheets to PDF, generate report PDF, and copy original SU PDF reports."
         )
     )
 
@@ -84,6 +86,16 @@ def parse_args():
         "--report-script",
         default="report_pdf.py",
         help="Path to your existing PDF report generator script.",
+    )
+
+    parser.add_argument(
+        "--excel-pdf-sheets",
+        nargs="+",
+        default=["Gráfico_Int", "Rec_fert"],
+        help=(
+            "Excel sheets to export into one PDF. "
+            "Default: Gráfico_Int Rec_fert"
+        ),
     )
 
     return parser.parse_args()
@@ -142,9 +154,19 @@ def main():
     requirements_csv = report_dir / "requirements.csv"
     optimal_csv = report_dir / "optimal_values.csv"
 
+    excel_pdf = report_dir / (
+        f"Excel_Report_{base_name}.pdf"
+    )
+
     output_pdf = report_dir / (
         f"Informe_{base_name}.pdf"
     )
+
+    # Initialize variables for final summary
+    generated_pdf = None
+    copied_resultados_excel = None
+    copied_template_excel = None
+    copied_su_pdfs = []
 
     # ------------------------------------------------------------
     # 1. Build filled Excel from RESULTADOS + template
@@ -158,6 +180,7 @@ def main():
         name=args.name,
         cultivo=args.cultivo,
         output_excel=filled_excel,
+        image_dir="extracted_images",
     )
 
     if not filled_excel.exists():
@@ -216,6 +239,11 @@ def main():
         output_excel=optimized_excel,
     )
 
+    if not optimized_excel.exists():
+        raise FileNotFoundError(
+            f"Optimized Excel was not created: {optimized_excel}"
+        )
+
     # ------------------------------------------------------------
     # 6. Recalculate optimized Excel
     # ------------------------------------------------------------
@@ -225,10 +253,28 @@ def main():
     recalculate_excel_with_xlwings(optimized_excel)
 
     # ------------------------------------------------------------
-    # 7. Generate PDF report using report_pdf.py
+    # 7. Export Excel sheets to PDF
+    #    Example: Gráfico_Int + Rec_fert -> 2-page PDF
     # ------------------------------------------------------------
 
-    print("\n[7] Generating PDF report")
+    print("\n[7] Exporting Excel sheets to PDF")
+
+    export_excel_sheets_to_pdf(
+        excel_file=optimized_excel,
+        output_pdf=excel_pdf,
+        sheets=tuple(args.excel_pdf_sheets),
+    )
+
+    if not excel_pdf.exists():
+        raise FileNotFoundError(
+            f"Excel PDF was not created: {excel_pdf}"
+        )
+
+    # ------------------------------------------------------------
+    # 8. Generate PDF report using report_pdf.py
+    # ------------------------------------------------------------
+
+    print("\n[8] Generating PDF report")
 
     generated_pdf = generate_pdf_report(
         report_script=report_script,
@@ -238,10 +284,10 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 8. Copy original input files into report directory
+    # 9. Copy original input files into report directory
     # ------------------------------------------------------------
 
-    print("\n[8] Copying input files to report directory")
+    print("\n[9] Copying input files to report directory")
 
     copied_resultados_excel = copy_file_to_dir(
         resultados_excel,
@@ -254,14 +300,12 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 9. Get SU number from RESULTADOS Excel column CODIGO
-    #    Example CODIGO: SU723-ILL-24 -> 723
+    # 10. Get SU number from RESULTADOS Excel column CODIGO
+    #     Example CODIGO: SU723-ILL-24 -> 723
     # ------------------------------------------------------------
 
-    copied_su_pdfs = []
-
     if args.pdf_folder:
-        print("\n[9] Getting SU number from RESULTADOS Excel")
+        print("\n[10] Getting SU number from RESULTADOS Excel")
 
         su_number, codigo = get_su_number_from_resultados_excel(
             resultados_excel=resultados_excel,
@@ -300,6 +344,7 @@ def main():
         copied_template_excel,
         filled_excel,
         optimized_excel,
+        excel_pdf,
         generated_pdf,
     ]
 
