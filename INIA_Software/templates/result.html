@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Resultado</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            margin: 0;
+            padding: 30px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: auto;
+            background: white;
+            padding: 30px;
+            border-radius: 14px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+        }
+
+        .success {
+            color: #166534;
+        }
+
+        .error {
+            color: #991b1b;
+        }
+
+        pre {
+            background: #111827;
+            color: #e5e7eb;
+            padding: 18px;
+            border-radius: 10px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-size: 13px;
+        }
+
+        a {
+            display: inline-block;
+            margin-top: 20px;
+            color: #2563eb;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .box {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+
+        {% if success %}
+            <h1 class="success">Correcto</h1>
+        {% else %}
+            <h1 class="error">Error</h1>
+        {% endif %}
+
+        <h2>{{ message }}</h2>
+
+        {% if command %}
+        <div class="box">
+            <h3>Command</h3>
+            <pre>{{ command }}</pre>
+        </div>
+        {% endif %}
+
+        <div class="box">
+            <h3>Output</h3>
+            <pre>{{ stdout }}</pre>
+        </div>
+
+        {% if stderr %}
+        <div class="box">
+            <h3>Errors</h3>
+            <pre>{{ stderr }}</pre>
+        </div>
+        {% endif %}
+
+        <a href="/">Generar otro reporte</a>
+    </div>
+</body>
+</html>
