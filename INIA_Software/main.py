@@ -3,6 +3,8 @@
 import argparse
 from pathlib import Path
 
+from excel_builder import build_excel_from_template
+
 from excel_requirements import get_requirements_with_excel
 
 from optimizer import (
@@ -33,36 +35,37 @@ from utils import (
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Full fertilizer workflow: read Excel requirements, optimize doses, "
-            "write optimized Excel, generate report PDF, and copy original SU PDFs."
+            "Full fertilizer workflow: build Excel from RESULTADOS + template, "
+            "read requirements, optimize fertilizer doses, write final Excel, "
+            "generate report PDF, and copy original SU PDF reports."
         )
-    )
-
-    parser.add_argument(
-        "--excel",
-        required=True,
-        help="Input Excel file already generated for the person/crop.",
-    )
-
-    parser.add_argument(
-        "--name",
-        required=True,
-        help='Person name, example: "Huaman Huaman Arturo"',
-    )
-
-    parser.add_argument(
-        "--cultivo",
-        required=True,
-        help='Crop name, example: "PAPA MEJORADA"',
     )
 
     parser.add_argument(
         "--resultados-excel",
         default="RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx",
         help=(
-            "Main input database Excel where CODIGO and person name are stored. "
-            "The script reads CODIGO, for example SU723-ILL-24, and extracts 723."
+            "Main Excel database where the person data and CODIGO are stored. "
+            "Example CODIGO: SU723-ILL-24."
         ),
+    )
+
+    parser.add_argument(
+        "--template-excel",
+        default="Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx",
+        help="Base fertilizer Excel template.",
+    )
+
+    parser.add_argument(
+        "--name",
+        required=True,
+        help='Person name, example: "Huaman Huaman Arturo".',
+    )
+
+    parser.add_argument(
+        "--cultivo",
+        required=True,
+        help='Crop name, example: "PAPA MEJORADA".',
     )
 
     parser.add_argument(
@@ -89,15 +92,19 @@ def parse_args():
 def main():
     args = parse_args()
 
-    input_excel = Path(args.excel).resolve()
     resultados_excel = Path(args.resultados_excel).resolve()
+    template_excel = Path(args.template_excel).resolve()
     report_script = Path(args.report_script).resolve()
 
-    if not input_excel.exists():
-        raise FileNotFoundError(f"Input Excel not found: {input_excel}")
-
     if not resultados_excel.exists():
-        raise FileNotFoundError(f"RESULTADOS Excel not found: {resultados_excel}")
+        raise FileNotFoundError(
+            f"RESULTADOS Excel not found: {resultados_excel}"
+        )
+
+    if not template_excel.exists():
+        raise FileNotFoundError(
+            f"Template Excel not found: {template_excel}"
+        )
 
     # ------------------------------------------------------------
     # Create central report directory
@@ -114,33 +121,76 @@ def main():
     print("=" * 80)
     print(f"Person: {args.name}")
     print(f"Cultivo: {args.cultivo}")
+    print(f"RESULTADOS Excel: {resultados_excel}")
+    print(f"Template Excel: {template_excel}")
     print(f"Report directory: {report_dir}")
 
     # ------------------------------------------------------------
-    # Define output files
+    # Output files
     # ------------------------------------------------------------
+
+    base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
+
+    filled_excel = report_dir / (
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_FILLED.xlsx"
+    )
+
+    optimized_excel = report_dir / (
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_OPTIMIZED.xlsx"
+    )
 
     requirements_csv = report_dir / "requirements.csv"
     optimal_csv = report_dir / "optimal_values.csv"
 
-    output_excel = report_dir / f"{input_excel.stem}_OPTIMIZED.xlsx"
-
     output_pdf = report_dir / (
-        f"Informe_{safe_filename(args.name)}_{safe_filename(args.cultivo)}.pdf"
+        f"Informe_{base_name}.pdf"
     )
 
     # ------------------------------------------------------------
-    # 1. Read requirements from Excel: Nec_fert!J37:J42
+    # 1. Build filled Excel from RESULTADOS + template
     # ------------------------------------------------------------
+
+    print("\n[1] Building filled Excel from RESULTADOS + template")
+
+    build_excel_from_template(
+        resultados_excel=resultados_excel,
+        template_excel=template_excel,
+        name=args.name,
+        cultivo=args.cultivo,
+        output_excel=filled_excel,
+    )
+
+    if not filled_excel.exists():
+        raise FileNotFoundError(
+            f"Filled Excel was not created: {filled_excel}"
+        )
+
+    print(f"Filled Excel created: {filled_excel}")
+
+    # ------------------------------------------------------------
+    # 2. Recalculate filled Excel before reading requirements
+    # ------------------------------------------------------------
+
+    print("\n[2] Recalculating filled Excel")
+
+    recalculate_excel_with_xlwings(filled_excel)
+
+    # ------------------------------------------------------------
+    # 3. Read requirements from filled Excel: Nec_fert!J37:J42
+    # ------------------------------------------------------------
+
+    print("\n[3] Reading fertilizer requirements")
 
     requirements = get_requirements_with_excel(
-        input_excel,
-        requirements_csv,
+        excel_file=filled_excel,
+        output_csv=requirements_csv,
     )
 
     # ------------------------------------------------------------
-    # 2. Optimize fertilizer values
+    # 4. Optimize fertilizer values
     # ------------------------------------------------------------
+
+    print("\n[4] Optimizing fertilizer doses")
 
     result = optimize_fertilizers(requirements)
 
@@ -150,29 +200,35 @@ def main():
     )
 
     save_optimal_values_csv(
-        optimal_csv,
-        result,
+        output_csv=optimal_csv,
+        result=result,
     )
 
     # ------------------------------------------------------------
-    # 3. Write optimal values to output Excel: Nec_fert!C53:C57
+    # 5. Write optimal values to final Excel: Nec_fert!C53:C57
     # ------------------------------------------------------------
+
+    print("\n[5] Writing optimized doses to final Excel")
 
     write_vector_to_excel(
-        excel_file=input_excel,
+        excel_file=filled_excel,
         csv_file=optimal_csv,
-        output_excel=output_excel,
+        output_excel=optimized_excel,
     )
 
     # ------------------------------------------------------------
-    # 4. Recalculate optimized Excel with real Excel
+    # 6. Recalculate optimized Excel
     # ------------------------------------------------------------
 
-    recalculate_excel_with_xlwings(output_excel)
+    print("\n[6] Recalculating optimized Excel")
+
+    recalculate_excel_with_xlwings(optimized_excel)
 
     # ------------------------------------------------------------
-    # 5. Generate PDF report using report_pdf.py
+    # 7. Generate PDF report using report_pdf.py
     # ------------------------------------------------------------
+
+    print("\n[7] Generating PDF report")
 
     generated_pdf = generate_pdf_report(
         report_script=report_script,
@@ -182,24 +238,33 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 6. Copy original input Excel into report directory
+    # 8. Copy original input files into report directory
     # ------------------------------------------------------------
 
-    copied_input_excel = copy_file_to_dir(
-        input_excel,
+    print("\n[8] Copying input files to report directory")
+
+    copied_resultados_excel = copy_file_to_dir(
+        resultados_excel,
+        report_dir,
+    )
+
+    copied_template_excel = copy_file_to_dir(
+        template_excel,
         report_dir,
     )
 
     # ------------------------------------------------------------
-    # 7. Get SU number from RESULTADOS Excel column CODIGO
-    #    Example CODIGO: SU723-ILL-24 -> SU number 723
+    # 9. Get SU number from RESULTADOS Excel column CODIGO
+    #    Example CODIGO: SU723-ILL-24 -> 723
     # ------------------------------------------------------------
 
     copied_su_pdfs = []
 
     if args.pdf_folder:
+        print("\n[9] Getting SU number from RESULTADOS Excel")
+
         su_number, codigo = get_su_number_from_resultados_excel(
-            resultados_excel=args.resultados_excel,
+            resultados_excel=resultados_excel,
             person_name=args.name,
         )
 
@@ -231,8 +296,10 @@ def main():
     files_to_show = [
         requirements_csv,
         optimal_csv,
-        copied_input_excel,
-        output_excel,
+        copied_resultados_excel,
+        copied_template_excel,
+        filled_excel,
+        optimized_excel,
         generated_pdf,
     ]
 
