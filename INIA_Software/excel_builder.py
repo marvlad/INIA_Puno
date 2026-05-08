@@ -9,15 +9,9 @@ import warnings
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image
 
+from products import ALLOWED_PRODUCTS
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
-
-
-# ============================================================
-# Allowed crops
-# ============================================================
-
-ALLOWED_PRODUCTS = [ "ACELGA", "AGUAYMANTO", "AJI", "AJO", "ALCACHOFA", "ALFALFA", "ALFALFA +RYE GRASS", "ALGODON", "APIO", "ARROZ", "ARVEJA", "AVENA + VICIA", "BETARRAGA", "BROCOLI", "CACAO", "CAFE", "CAIGUA", "CALABAZA", "CAMOTE", "CAMU CAMU", "CAÑA DE AZUCAR", "CAÑIHUA", "CASTAÑA", "CEBADA", "CEBOLLA", "CEBOLLA CHINA", "CENTENO", "CHÍA", "CHIRIMOYA", "CIRUELO", "CITRICOS", "COCO", "COCOTERO", "COL", "COLIFLOR", "COPOAZÚ", "CULANTRO", "DURAZNO", "ESPARRAGO", "ESPINACA", "FLORES", "FORESTALES", "FRESA", "FRIJOL", "GARBANZO", "GIRASOL", "GRANADILLA", "GUANÁBANA", "GUAYABO", "HABA", "HIGUERA", "HORTALIZAS", "LECHUGA", "LIMÓN", "LLACÓN", "MACA", "MAIZ AMILACEO (GRANO)", "MAIZ MORADO", "MANGO", "MANI", "MANZANO Y PERAL", "MELON", "NA FORRAJERA", "NABO", "OCA", "OLIVO", "OLLUCO", "PACAE", "PALMA ACEITERA", "PALTO", "PAN DE ÁRBOL", "PAPA MEJORADA", "PAPA NATIVA", "PAPAYA", "PAPAYITA", "PASTO NATURAL", "PASTOS ASOCIADOS", "PEPINO", "PIÑA", "PITAHAYA", "PLATANO", "QUINUA", "RABANO", "ROCOTO", "RYE GRASS", "SÁBILA", "SANDIA", "SOYA", "TABACO", "TARA", "TARWI", "TOMATE", "TREBOL", "TRIGO", "TUMBO", "TUNA", "VID", "YUCA", "ZANAHORIA",]
 
 # ============================================================
 # Config
