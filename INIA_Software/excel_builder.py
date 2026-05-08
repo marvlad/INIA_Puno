@@ -17,108 +17,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 # Allowed crops
 # ============================================================
 
-ALLOWED_PRODUCTS = [
-    "ACELGA",
-    "AGUAYMANTO",
-    "AJI",
-    "AJO",
-    "ALCACHOFA",
-    "ALFALFA",
-    "ALFALFA +RYE GRASS",
-    "ALGODON",
-    "APIO",
-    "ARROZ",
-    "ARVEJA",
-    "AVENA + VICIA",
-    "BETARRAGA",
-    "BROCOLI",
-    "CACAO",
-    "CAFE",
-    "CAIGUA",
-    "CALABAZA",
-    "CAMOTE",
-    "CAMU CAMU",
-    "CAÑA DE AZUCAR",
-    "CAÑIHUA",
-    "CASTAÑA",
-    "CEBADA",
-    "CEBOLLA",
-    "CEBOLLA CHINA",
-    "CENTENO",
-    "CHÍA",
-    "CHIRIMOYA",
-    "CIRUELO",
-    "CITRICOS",
-    "COCO",
-    "COCOTERO",
-    "COL",
-    "COLIFLOR",
-    "COPOAZÚ",
-    "CULANTRO",
-    "DURAZNO",
-    "ESPARRAGO",
-    "ESPINACA",
-    "FLORES",
-    "FORESTALES",
-    "FRESA",
-    "FRIJOL",
-    "GARBANZO",
-    "GIRASOL",
-    "GRANADILLA",
-    "GUANÁBANA",
-    "GUAYABO",
-    "HABA",
-    "HIGUERA",
-    "HORTALIZAS",
-    "LECHUGA",
-    "LIMÓN",
-    "LLACÓN",
-    "MACA",
-    "MAIZ AMILACEO (GRANO)",
-    "MAIZ MORADO",
-    "MANGO",
-    "MANI",
-    "MANZANO Y PERAL",
-    "MELON",
-    "NA FORRAJERA",
-    "NABO",
-    "OCA",
-    "OLIVO",
-    "OLLUCO",
-    "PACAE",
-    "PALMA ACEITERA",
-    "PALTO",
-    "PAN DE ÁRBOL",
-    "PAPA MEJORADA",
-    "PAPA NATIVA",
-    "PAPAYA",
-    "PAPAYITA",
-    "PASTO NATURAL",
-    "PASTOS ASOCIADOS",
-    "PEPINO",
-    "PIÑA",
-    "PITAHAYA",
-    "PLATANO",
-    "QUINUA",
-    "RABANO",
-    "ROCOTO",
-    "RYE GRASS",
-    "SÁBILA",
-    "SANDIA",
-    "SOYA",
-    "TABACO",
-    "TARA",
-    "TARWI",
-    "TOMATE",
-    "TREBOL",
-    "TRIGO",
-    "TUMBO",
-    "TUNA",
-    "VID",
-    "YUCA",
-    "ZANAHORIA",
-]
-
+ALLOWED_PRODUCTS = [ "ACELGA", "AGUAYMANTO", "AJI", "AJO", "ALCACHOFA", "ALFALFA", "ALFALFA +RYE GRASS", "ALGODON", "APIO", "ARROZ", "ARVEJA", "AVENA + VICIA", "BETARRAGA", "BROCOLI", "CACAO", "CAFE", "CAIGUA", "CALABAZA", "CAMOTE", "CAMU CAMU", "CAÑA DE AZUCAR", "CAÑIHUA", "CASTAÑA", "CEBADA", "CEBOLLA", "CEBOLLA CHINA", "CENTENO", "CHÍA", "CHIRIMOYA", "CIRUELO", "CITRICOS", "COCO", "COCOTERO", "COL", "COLIFLOR", "COPOAZÚ", "CULANTRO", "DURAZNO", "ESPARRAGO", "ESPINACA", "FLORES", "FORESTALES", "FRESA", "FRIJOL", "GARBANZO", "GIRASOL", "GRANADILLA", "GUANÁBANA", "GUAYABO", "HABA", "HIGUERA", "HORTALIZAS", "LECHUGA", "LIMÓN", "LLACÓN", "MACA", "MAIZ AMILACEO (GRANO)", "MAIZ MORADO", "MANGO", "MANI", "MANZANO Y PERAL", "MELON", "NA FORRAJERA", "NABO", "OCA", "OLIVO", "OLLUCO", "PACAE", "PALMA ACEITERA", "PALTO", "PAN DE ÁRBOL", "PAPA MEJORADA", "PAPA NATIVA", "PAPAYA", "PAPAYITA", "PASTO NATURAL", "PASTOS ASOCIADOS", "PEPINO", "PIÑA", "PITAHAYA", "PLATANO", "QUINUA", "RABANO", "ROCOTO", "RYE GRASS", "SÁBILA", "SANDIA", "SOYA", "TABACO", "TARA", "TARWI", "TOMATE", "TREBOL", "TRIGO", "TUMBO", "TUNA", "VID", "YUCA", "ZANAHORIA"]
 
 # ============================================================
 # Config
@@ -156,6 +55,38 @@ def to_float(value):
         return float(str(value).replace(",", ".").strip())
     except ValueError:
         return None
+
+
+def parse_clima(value):
+    """
+    Converts clima input to Excel code:
+
+        1 or Cálido -> 1
+        2 or Medio  -> 2
+        3 or Frío   -> 3
+
+    If missing/empty/invalid, returns None.
+    The caller decides the default.
+    """
+
+    if value is None:
+        return None
+
+    text = norm(value)
+
+    if text == "":
+        return None
+
+    if text in ["1", "1.0", "CALIDO", "CÁLIDO"]:
+        return 1
+
+    if text in ["2", "2.0", "MEDIO"]:
+        return 2
+
+    if text in ["3", "3.0", "FRIO", "FRÍO"]:
+        return 3
+
+    return None
 
 
 def find_header_row(ws, required_header="NOMBRES Y APELLIDOS", max_rows=30):
@@ -288,6 +219,19 @@ def validate_crop(cultivo):
     return allowed_lookup[cultivo_key]
 
 
+def find_sheet_name(wb, candidates):
+    """
+    Finds the first existing sheet name from a list of candidates.
+    Useful because some files may have accent/encoding differences.
+    """
+
+    for candidate in candidates:
+        if candidate in wb.sheetnames:
+            return candidate
+
+    return None
+
+
 # ============================================================
 # Images
 # ============================================================
@@ -342,10 +286,9 @@ def reinsert_images(wb, image_dir):
         ],
     }
 
-    # Also support incorrectly encoded sheet names if they exist.
     fallback_sheet_names = {
-        "Interpretación": ["Interpretación", "InterpretaciÃ³n"],
-        "Gráfico_Int": ["Gráfico_Int", "GrÃ¡fico_Int"],
+        "Interpretación": ["Interpretación", "Interpretacion", "InterpretaciÃ³n"],
+        "Gráfico_Int": ["Gráfico_Int", "Grafico_Int", "GrÃ¡fico_Int"],
     }
 
     for sheet_name, images in images_by_sheet.items():
@@ -408,6 +351,7 @@ def build_excel_from_template(
     fills Base_Datos row 3 in the template,
     sets the crop,
     chooses Olsen/Bray based on pH,
+    writes Clima to Interpretación!BA11,
     and saves output_excel.
     """
 
@@ -453,11 +397,11 @@ def build_excel_from_template(
     input_cultivo = get(person_row_values, input_headers, "CULTIVO A INSTALAR")
     ph_value = get(person_row_values, input_headers, "pH")
     p_value = get(person_row_values, input_headers, "P_mg/kg)")
+    clima_value = get(person_row_values, input_headers, "Clima")
+    codigo = get(person_row_values, input_headers, "CODIGO")
 
     ph_number = to_float(ph_value)
     p_number = to_float(p_value)
-
-    codigo = get(person_row_values, input_headers, "CODIGO")
 
     print("\nFound person:")
     print(f"  Name: {name}")
@@ -467,6 +411,7 @@ def build_excel_from_template(
     print(f"  Plan de Recomendación from user: {user_product}")
     print(f"  pH: {ph_value}")
     print(f"  P_mg/kg): {p_value}")
+    print(f"  Clima from DB: {clima_value}")
 
     if ph_number is None:
         print("  Phosphorus method: pH invalid or empty")
@@ -612,9 +557,51 @@ def build_excel_from_template(
     target_ws["T3"] = user_product
     print(f"\nT3 / Plan de Recomendación de Fertilización: {user_product}")
 
-    # Phosphorus method:
+    # ------------------------------------------------------------
+    # 6.1 Force Clima value into Interpretación!BA11
+    # ------------------------------------------------------------
+
+    clima_code = parse_clima(clima_value)
+    clima_was_assumed = False
+
+    if clima_code is None:
+        clima_code = 2
+        clima_was_assumed = True
+
+    interpretation_sheet_name = find_sheet_name(
+        target_wb,
+        ["Interpretación", "Interpretacion", "InterpretaciÃ³n"],
+    )
+
+    if interpretation_sheet_name is None:
+        print("WARNING: Interpretation sheet not found. Could not write BA11.")
+    else:
+        target_wb[interpretation_sheet_name]["BA11"] = clima_code
+
+        if clima_was_assumed:
+            print(
+                f"WARNING: Clima was not found or was empty/invalid in the DB. "
+                f"Assuming Clima = 2 (Medio). "
+                f"Written to {interpretation_sheet_name}!BA11."
+            )
+        else:
+            clima_label = {
+                1: "Cálido",
+                2: "Medio",
+                3: "Frío",
+            }.get(clima_code, "Unknown")
+
+            print(
+                f"{interpretation_sheet_name}!BA11 / Clima: "
+                f"{clima_code} ({clima_label}) from DB value: {clima_value}"
+            )
+
+    # ------------------------------------------------------------
+    # 6.2 Phosphorus method:
     # AL3 = Fósforo Disponible Olsen
     # AM3 = Fósforo Disponible Bray y Kurtz
+    # ------------------------------------------------------------
+
     target_ws["AL3"] = 0
     target_ws["AM3"] = 0
 
