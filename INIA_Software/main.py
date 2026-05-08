@@ -23,7 +23,7 @@ from excel_to_pdf import export_excel_sheets_to_pdf
 from report_runner import generate_pdf_report
 
 from su_pdf_finder import (
-    get_su_number_from_resultados_excel,
+    get_su_info_from_resultados_excel,
     copy_su_pdfs_to_report_dir,
 )
 
@@ -300,26 +300,29 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 10. Get SU number from RESULTADOS Excel column CODIGO
-    #     Example CODIGO: SU723-ILL-24 -> 723
+    # 10. Get SU information from RESULTADOS Excel
+    #     Example CODIGO: SU723-ILL-24 -> SU number 723, year 24
     # ------------------------------------------------------------
 
     if args.pdf_folder:
-        print("\n[10] Getting SU number from RESULTADOS Excel")
+        print("\n[10] Getting SU information from RESULTADOS Excel")
 
-        su_number, codigo = get_su_number_from_resultados_excel(
+        su_info = get_su_info_from_resultados_excel(
             resultados_excel=resultados_excel,
             person_name=args.name,
         )
 
         print("\nSU information:")
-        print(f"  CODIGO: {codigo}")
-        print(f"  SU number: {su_number}")
+        print(f"  CODIGO: {su_info.get('codigo')}")
+        print(f"  SU number: {su_info.get('su_number')}")
+        print(f"  Year: {su_info.get('year')}")
+        print(f"  Place: {su_info.get('place')}")
+        print(f"  Lab: {su_info.get('lab')}")
 
         copied_su_pdfs = copy_su_pdfs_to_report_dir(
-            su_number=su_number,
-            pdf_folder=args.pdf_folder,
-            report_dir=report_dir,
+            su_info,
+            args.pdf_folder,
+            report_dir,
         )
     else:
         print("\nNo --pdf-folder provided. Skipping original SU PDF search.")
