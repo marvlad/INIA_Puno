@@ -394,6 +394,11 @@ def build_excel_from_template(
     clima_value = get(person_row_values, input_headers, "Clima")
     codigo = get(person_row_values, input_headers, "CODIGO")
 
+    # Added location fields
+    dep = get(person_row_values, input_headers, "DEP")
+    prov = get(person_row_values, input_headers, "PROV")
+    dist = get(person_row_values, input_headers, "DIST")
+
     ph_number = to_float(ph_value)
     p_number = to_float(p_value)
 
@@ -401,6 +406,9 @@ def build_excel_from_template(
     print(f"  Name: {name}")
     print(f"  Input Excel row: {person_row_number}")
     print(f"  CODIGO: {codigo}")
+    print(f"  DEP: {dep}")
+    print(f"  PROV: {prov}")
+    print(f"  DIST: {dist}")
     print(f"  CULTIVO A INSTALAR from input file: {input_cultivo}")
     print(f"  Plan de Recomendación from user: {user_product}")
     print(f"  pH: {ph_value}")
