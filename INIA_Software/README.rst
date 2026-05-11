@@ -58,7 +58,7 @@ Example:
 
 .. code-block:: bat
 
-   --name "Huaman Huaman Arturo"
+   --name "Pedro Pedro Arturo"
 
 Output
 ------
