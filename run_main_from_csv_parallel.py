@@ -1,5 +1,5 @@
 # run_main_from_csv_parallel.py
-
+# python run_main_from_csv_parallel.py --input-csv "out.csv" --main-script "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\main.py" --resultados-excel "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\RESULTADOS USUARIOS 2M_Illpa 2.0.2.xlsx" --template-excel "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx" --report-root "G:\Mi unidad\REPORTES_GENERADOS" --pdf-folder "G:\Mi unidad\LABSAF ILLPA\CAMPAÃ‘A PERU 2M- LABSAF ILLPA\INFORMES DE ENSAYO" --report-script "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\report_pdf.py" --workers 4
 from pathlib import Path
 import argparse
 import csv
