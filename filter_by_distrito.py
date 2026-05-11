@@ -28,7 +28,7 @@ def norm(text):
     return text.strip()
 
 
-def find_header_row(ws, required_headers=None, max_rows=30):
+def find_header_row(ws, required_headers=None, max_rows=50):
     """
     Finds the header row by looking for key headers.
     """
@@ -41,10 +41,13 @@ def find_header_row(ws, required_headers=None, max_rows=30):
 
     required_norm = [norm(h) for h in required_headers]
 
-    for row_number in range(1, max_rows + 1):
+    max_row = ws.max_row or max_rows
+    max_col = ws.max_column or 100
+
+    for row_number in range(1, min(max_row, max_rows) + 1):
         row_values = [
             ws.cell(row_number, col).value
-            for col in range(1, ws.max_column + 1)
+            for col in range(1, max_col + 1)
         ]
 
         normalized_row = [norm(value) for value in row_values]
@@ -53,7 +56,7 @@ def find_header_row(ws, required_headers=None, max_rows=30):
             return row_number
 
     raise ValueError(
-        "Could not find header row with required headers: "
+        f"Could not find header row in sheet '{ws.title}' with required headers: "
         + ", ".join(required_headers)
     )
 
@@ -65,13 +68,46 @@ def get_headers(ws, header_row):
     """
     headers = {}
 
-    for col in range(1, ws.max_column + 1):
+    max_col = ws.max_column or 100
+
+    for col in range(1, max_col + 1):
         value = ws.cell(header_row, col).value
 
         if value is not None:
             headers[norm(value)] = col
 
     return headers
+
+
+def find_data_sheet(wb, sheet_name=None):
+    """
+    If sheet_name is given, use that sheet.
+    Otherwise, search all sheets until one contains the needed headers.
+    """
+    if sheet_name:
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(f"Sheet not found: {sheet_name}")
+
+        ws = wb[sheet_name]
+        find_header_row(ws)
+        return ws
+
+    for ws in wb.worksheets:
+        try:
+            find_header_row(ws)
+            print(f"Detected data sheet: {ws.title}")
+            return ws
+        except ValueError:
+            continue
+
+    print("Available sheets:")
+    for sheet in wb.sheetnames:
+        print(f"  - {sheet}")
+
+    raise ValueError(
+        "Could not find a sheet containing DIST, NOMBRES Y APELLIDOS, "
+        "and CULTIVO A INSTALAR."
+    )
 
 
 def filter_by_distrito(input_excel, distrito, output_csv, sheet_name=None):
@@ -81,15 +117,11 @@ def filter_by_distrito(input_excel, distrito, output_csv, sheet_name=None):
     if not input_excel.exists():
         raise FileNotFoundError(f"Input Excel file not found: {input_excel}")
 
-    wb = load_workbook(input_excel, data_only=True, read_only=True)
+    # Do NOT use read_only=True here.
+    # Some Excel files return ws.max_column = None in read_only mode.
+    wb = load_workbook(input_excel, data_only=True)
 
-    if sheet_name:
-        if sheet_name not in wb.sheetnames:
-            raise ValueError(f"Sheet not found: {sheet_name}")
-
-        ws = wb[sheet_name]
-    else:
-        ws = wb.active
+    ws = find_data_sheet(wb, sheet_name=sheet_name)
 
     header_row = find_header_row(ws)
     headers = get_headers(ws, header_row)
@@ -135,7 +167,8 @@ def filter_by_distrito(input_excel, distrito, output_csv, sheet_name=None):
 
     print()
     print(f"Input Excel: {input_excel}")
-    print(f"Sheet: {ws.title}")
+    print(f"Sheet used: {ws.title}")
+    print(f"Header row: {header_row}")
     print(f"DIST searched: {distrito}")
     print(f"Matches found: {len(results)}")
     print(f"Output CSV: {output_csv}")
@@ -167,7 +200,7 @@ def main():
     parser.add_argument(
         "--sheet",
         default=None,
-        help="Optional sheet name. If not provided, the active sheet is used.",
+        help="Optional sheet name. If not provided, all sheets are searched.",
     )
 
     args = parser.parse_args()
