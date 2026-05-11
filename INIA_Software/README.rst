@@ -1,8 +1,8 @@
-python main.py ^
-  --resultados-excel "RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx" ^
-  --template-excel "Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx" ^
-  --name "Huaman Huaman Arturo" ^
-  --cultivo "PAPA MEJORADA" ^
-  --report-root "G:\Mi unidad\REPORTES_GENERADOS" ^
-  --pdf-folder "G:\Mi unidad\LABSAF ILLPA\CAMPAÑA PERU 2M- LABSAF ILLPA\INFORMES DE ENSAYO" ^
-  --report-script "report_pdf.py"
+## How to run the report generator
+
+The main program is executed from the command line using `main.py`.
+
+### Basic command
+
+```bat
+python main.py --resultados-excel "RESULTADOS.xlsx" --template-excel "TEMPLATE.xlsx" --name "PERSON NAME" --cultivo "CULTIVO" --report-root "OUTPUT_FOLDER" --pdf-folder "PDF_FOLDER" --report-script "report_pdf.py"
