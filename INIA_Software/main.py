@@ -28,6 +28,7 @@ from su_pdf_finder import (
 from utils import (
     safe_filename,
     make_report_directory,
+    copy_file_to_dir,
 )
 
 
@@ -139,23 +140,28 @@ def main():
     base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
 
     filled_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
-        f"{base_name}_FILLED.xlsx"
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_FILLED.xlsx"
     )
 
     optimized_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
-        f"{base_name}_OPTIMIZED.xlsx"
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_OPTIMIZED.xlsx"
     )
 
     requirements_csv = report_dir / "requirements.csv"
     optimal_csv = report_dir / "optimal_values.csv"
 
-    excel_pdf = report_dir / f"Excel_Report_{base_name}.pdf"
-    output_pdf = report_dir / f"Informe_{base_name}.pdf"
+    excel_pdf = report_dir / (
+        f"Excel_Report_{base_name}.pdf"
+    )
+
+    output_pdf = report_dir / (
+        f"Informe_{base_name}.pdf"
+    )
 
     # Initialize variables for final summary
     generated_pdf = None
+    copied_resultados_excel = None
+    copied_template_excel = None
     copied_su_pdfs = []
 
     # ------------------------------------------------------------
@@ -184,12 +190,7 @@ def main():
     # ------------------------------------------------------------
     print("\n[2] Recalculating filled Excel")
 
-    recalculate_excel_with_xlwings(
-        filled_excel,
-        max_retries=5,
-        wait_seconds=10,
-        kill_excel_on_retry=True,
-    )
+    recalculate_excel_with_xlwings(filled_excel)
 
     # ------------------------------------------------------------
     # 3. Read requirements from filled Excel: Nec_fert!J37:J42
@@ -239,12 +240,7 @@ def main():
     # ------------------------------------------------------------
     print("\n[6] Recalculating optimized Excel")
 
-    recalculate_excel_with_xlwings(
-        optimized_excel,
-        max_retries=5,
-        wait_seconds=10,
-        kill_excel_on_retry=True,
-    )
+    recalculate_excel_with_xlwings(optimized_excel)
 
     # ------------------------------------------------------------
     # 7. Export Excel sheets to PDF
@@ -276,10 +272,20 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 9. Do not copy original input Excel files
+    # 9. Copy original input files into report directory
     # ------------------------------------------------------------
-    print("\n[9] Skipping copy of original input Excel files")
-    print("RESULTADOS Excel and template Excel will not be copied to the report directory.")
+    print("\n[9] Copying input files to report directory")
+
+    # Do NOT copy RESULTADOS Excel.
+    copied_resultados_excel = None
+    print("Skipping RESULTADOS Excel copy.")
+
+    # Keep copying the template Excel, as in the original workflow.
+    # If you also do not want the template copied, set this to None.
+    copied_template_excel = copy_file_to_dir(
+        template_excel,
+        report_dir,
+    )
 
     # ------------------------------------------------------------
     # 10. Get SU information from RESULTADOS Excel
@@ -324,6 +330,7 @@ def main():
     files_to_show = [
         requirements_csv,
         optimal_csv,
+        copied_template_excel,
         filled_excel,
         optimized_excel,
         excel_pdf,
