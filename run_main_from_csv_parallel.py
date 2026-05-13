@@ -1,5 +1,20 @@
 # run_main_from_csv_parallel.py
-# python run_main_from_csv_parallel.py --input-csv "out.csv" --main-script "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\main.py" --resultados-excel "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\RESULTADOS USUARIOS 2M_Illpa 2.0.2.xlsx" --template-excel "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx" --report-root "G:\Mi unidad\REPORTES_GENERADOS" --pdf-folder "G:\Mi unidad\LABSAF ILLPA\CAMPAÃ‘A PERU 2M- LABSAF ILLPA\INFORMES DE ENSAYO" --report-script "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\report_pdf.py" --workers 4
+#
+# Recommended for Excel/xlwings stability:
+#
+# python run_main_from_csv_parallel.py ^
+#   --input-csv "out.csv" ^
+#   --main-script "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\main.py" ^
+#   --resultados-excel "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\RESULTADOS USUARIOS 2M_Illpa 2.0.2.xlsx" ^
+#   --template-excel "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx" ^
+#   --report-root "G:\Mi unidad\REPORTES_GENERADOS" ^
+#   --pdf-folder "G:\Mi unidad\LABSAF ILLPA\CAMPAÑA PERU 2M- LABSAF ILLPA\INFORMES DE ENSAYO" ^
+#   --report-script "D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\report_pdf.py" ^
+#   --workers 1 ^
+#   --delay-between-jobs 10 ^
+#   --retries 2 ^
+#   --kill-excel-before-retry
+
 from pathlib import Path
 import argparse
 import csv
@@ -7,6 +22,7 @@ import subprocess
 import sys
 import re
 import unicodedata
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
@@ -16,7 +32,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 def safe_filename(text):
     """
-    Convert a person name into a safe filename.
+    Convert a person name/cultivo into a safe filename.
     """
     if text is None:
         return "unknown"
@@ -74,7 +90,23 @@ def read_jobs_from_csv(csv_file):
     return jobs
 
 
-def run_one_job(job, args_dict):
+def kill_excel_processes():
+    """
+    Force-close all Excel processes.
+
+    WARNING:
+    This closes every open Excel window on the computer.
+    Use only when the machine is dedicated to running this batch.
+    """
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "EXCEL.EXE"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+
+def run_one_job(job, args_dict, attempt=1):
     """
     Runs main.py for one person/cultivo.
     """
@@ -84,7 +116,12 @@ def run_one_job(job, args_dict):
     logs_dir = Path(args_dict["logs_dir"])
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = logs_dir / f"{safe_filename(name)}_{safe_filename(cultivo)}.log"
+    base_log_name = f"{safe_filename(name)}_{safe_filename(cultivo)}"
+
+    if attempt == 1:
+        log_file = logs_dir / f"{base_log_name}.log"
+    else:
+        log_file = logs_dir / f"{base_log_name}_retry_{attempt}.log"
 
     command = [
         sys.executable,
@@ -129,7 +166,64 @@ def run_one_job(job, args_dict):
         "cultivo": cultivo,
         "returncode": result.returncode,
         "log_file": str(log_file),
+        "attempt": attempt,
     }
+
+
+def run_one_job_with_retries(job, args_dict, retries=2, delay=10, kill_excel_before_retry=False):
+    """
+    Runs one job and retries if it fails.
+
+    This is useful for random Excel/xlwings/COM/RPC failures.
+    """
+    last_result = None
+    total_attempts = retries + 1
+
+    for attempt in range(1, total_attempts + 1):
+        result = run_one_job(job, args_dict, attempt=attempt)
+        last_result = result
+
+        if result["returncode"] == 0:
+            return result
+
+        print(
+            f"[RETRY NEEDED] {job['name']} | {job['cultivo']} "
+            f"failed on attempt {attempt}/{total_attempts}"
+        )
+        print(f"               Log: {result['log_file']}")
+
+        if attempt < total_attempts:
+            if kill_excel_before_retry:
+                print("Closing leftover Excel processes before retry...")
+                kill_excel_processes()
+                time.sleep(3)
+
+            print(f"Waiting {delay} seconds before retry...")
+            time.sleep(delay)
+
+    return last_result
+
+
+def print_result(result):
+    """
+    Prints one job result and returns True if successful.
+    """
+    name = result["name"]
+    cultivo = result["cultivo"]
+    returncode = result["returncode"]
+    log_file = result["log_file"]
+    attempt = result.get("attempt", 1)
+
+    if returncode == 0:
+        if attempt == 1:
+            print(f"[OK] {name} | {cultivo}")
+        else:
+            print(f"[OK after retry {attempt}] {name} | {cultivo}")
+        return True
+
+    print(f"[FAILED] {name} | {cultivo}")
+    print(f"         Log: {log_file}")
+    return False
 
 
 # ------------------------------------------------------------
@@ -138,7 +232,7 @@ def run_one_job(job, args_dict):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run main.py in parallel for all rows in a CSV file."
+        description="Run main.py for all rows in a CSV file."
     )
 
     parser.add_argument(
@@ -186,14 +280,52 @@ def main():
     parser.add_argument(
         "--workers",
         type=int,
-        default=4,
-        help="Number of parallel workers. Default: 4.",
+        default=1,
+        help=(
+            "Number of parallel workers. "
+            "Use 1 if Excel/xlwings/COM is involved. Default: 1."
+        ),
     )
 
     parser.add_argument(
         "--logs-dir",
         default="batch_logs",
         help="Folder where logs will be saved.",
+    )
+
+    parser.add_argument(
+        "--delay-between-jobs",
+        type=float,
+        default=10.0,
+        help=(
+            "Seconds to wait between jobs in sequential mode. "
+            "Useful for Excel/xlwings cleanup. Default: 10."
+        ),
+    )
+
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="Number of retries for failed jobs in sequential mode. Default: 2.",
+    )
+
+    parser.add_argument(
+        "--kill-excel-before-job",
+        action="store_true",
+        help=(
+            "Force-close Excel before each job. "
+            "WARNING: closes all open Excel windows."
+        ),
+    )
+
+    parser.add_argument(
+        "--kill-excel-before-retry",
+        action="store_true",
+        help=(
+            "Force-close Excel before retrying a failed job. "
+            "WARNING: closes all open Excel windows."
+        ),
     )
 
     args = parser.parse_args()
@@ -205,7 +337,21 @@ def main():
         return
 
     print(f"Jobs found: {len(jobs)}")
-    print(f"Running with {args.workers} parallel workers")
+    print(f"Workers: {args.workers}")
+
+    if args.workers == 1:
+        print("Sequential mode enabled.")
+        print(f"Delay between jobs: {args.delay_between_jobs} seconds")
+        print(f"Retries per failed job: {args.retries}")
+    else:
+        print("Parallel mode enabled.")
+        print("WARNING: parallel mode is not recommended if main.py uses Excel/xlwings.")
+
+    if args.kill_excel_before_job:
+        print("WARNING: Excel will be force-closed before every job.")
+
+    if args.kill_excel_before_retry:
+        print("WARNING: Excel will be force-closed before every retry.")
 
     args_dict = {
         "main_script": str(Path(args.main_script)),
@@ -220,27 +366,53 @@ def main():
     successes = 0
     failures = 0
 
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = [
-            executor.submit(run_one_job, job, args_dict)
-            for job in jobs
-        ]
+    # ------------------------------------------------------------
+    # Sequential mode: safest for Excel/xlwings
+    # ------------------------------------------------------------
+    if args.workers == 1:
+        for index, job in enumerate(jobs, start=1):
+            print()
+            print(f"[{index}/{len(jobs)}] Starting: {job['name']} | {job['cultivo']}")
 
-        for future in as_completed(futures):
-            result = future.result()
+            if args.kill_excel_before_job:
+                print("Closing leftover Excel processes before job...")
+                kill_excel_processes()
+                time.sleep(3)
 
-            name = result["name"]
-            cultivo = result["cultivo"]
-            returncode = result["returncode"]
-            log_file = result["log_file"]
+            result = run_one_job_with_retries(
+                job=job,
+                args_dict=args_dict,
+                retries=args.retries,
+                delay=args.delay_between_jobs,
+                kill_excel_before_retry=args.kill_excel_before_retry,
+            )
 
-            if returncode == 0:
+            if print_result(result):
                 successes += 1
-                print(f"[OK] {name} | {cultivo}")
             else:
                 failures += 1
-                print(f"[FAILED] {name} | {cultivo}")
-                print(f"         Log: {log_file}")
+
+            if index < len(jobs):
+                print(f"Waiting {args.delay_between_jobs} seconds before next job...")
+                time.sleep(args.delay_between_jobs)
+
+    # ------------------------------------------------------------
+    # Parallel mode: kept for non-Excel-safe workflows
+    # ------------------------------------------------------------
+    else:
+        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+            futures = [
+                executor.submit(run_one_job, job, args_dict, 1)
+                for job in jobs
+            ]
+
+            for future in as_completed(futures):
+                result = future.result()
+
+                if print_result(result):
+                    successes += 1
+                else:
+                    failures += 1
 
     print()
     print("Batch finished.")
