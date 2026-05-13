@@ -9,6 +9,10 @@ import csv
 from openpyxl import load_workbook
 
 
+# ------------------------------------------------------------
+# Expected INIA columns
+# ------------------------------------------------------------
+
 ALL_COLUMNS = [
     "Nº",
     "DEP",
@@ -39,6 +43,17 @@ ALL_COLUMNS = [
     "OBS",
 ]
 
+
+# Output columns required by run_main_from_csv_parallel.py
+DEFAULT_OUTPUT_COLUMNS = [
+    "NOMBRES Y APELLIDOS",
+    "CULTIVO A INSTALAR",
+]
+
+
+# ------------------------------------------------------------
+# Text helpers
+# ------------------------------------------------------------
 
 def norm(text):
     """
@@ -108,6 +123,10 @@ def make_output_name_from_filters(filters):
     return filename + ".csv"
 
 
+# ------------------------------------------------------------
+# Excel helpers
+# ------------------------------------------------------------
+
 def find_header_row(ws, max_rows=50):
     """
     Finds the most likely header row using the expected INIA headers.
@@ -126,7 +145,11 @@ def find_header_row(ws, max_rows=50):
             for col in range(1, max_col + 1)
         ]
 
-        normalized_row = [norm(value) for value in row_values if value is not None]
+        normalized_row = [
+            norm(value)
+            for value in row_values
+            if value is not None and str(value).strip()
+        ]
 
         score = 0
         for header in known_norm:
@@ -198,48 +221,9 @@ def find_data_sheet(wb, sheet_name=None):
     raise ValueError("Could not find a suitable data sheet.")
 
 
-def parse_output_columns(output_columns, headers_original):
-    """
-    output_columns can be:
-        None or ""        -> all standard INIA columns that exist in Excel
-        "ALL"             -> all columns found in Excel
-        "COL1,COL2,COL3"  -> selected columns
-    """
-    if output_columns is None or not str(output_columns).strip():
-        available_norm = {norm(h): h for h in headers_original}
-
-        selected = []
-        for col in ALL_COLUMNS:
-            if norm(col) in available_norm:
-                selected.append(available_norm[norm(col)])
-
-        return selected
-
-    output_columns = str(output_columns).strip()
-
-    if norm(output_columns) == "ALL":
-        return headers_original
-
-    return [col.strip() for col in output_columns.split(",") if col.strip()]
-
-
-def value_matches(cell_value, target_value, mode="exact"):
-    """
-    mode:
-        exact    -> normalized cell == normalized target
-        contains -> normalized target inside normalized cell
-    """
-    cell_norm = norm(cell_value)
-    target_norm = norm(target_value)
-
-    if mode == "exact":
-        return cell_norm == target_norm
-
-    if mode == "contains":
-        return target_norm in cell_norm
-
-    raise ValueError(f"Unknown match mode: {mode}")
-
+# ------------------------------------------------------------
+# Filter helpers
+# ------------------------------------------------------------
 
 def parse_filters_from_text(filters_text):
     """
@@ -296,6 +280,62 @@ def parse_filters_from_text(filters_text):
     return filters
 
 
+def value_matches(cell_value, target_value, mode="exact"):
+    """
+    mode:
+        exact    -> normalized cell == normalized target
+        contains -> normalized target inside normalized cell
+    """
+    cell_norm = norm(cell_value)
+    target_norm = norm(target_value)
+
+    if mode == "exact":
+        return cell_norm == target_norm
+
+    if mode == "contains":
+        return target_norm in cell_norm
+
+    raise ValueError(f"Unknown match mode: {mode}")
+
+
+def validate_filter_columns(filters, headers_norm_to_col, headers_original):
+    """
+    Checks that all requested filter columns exist in the Excel file.
+    """
+    missing = []
+
+    for item in filters:
+        if norm(item["column"]) not in headers_norm_to_col:
+            missing.append(item["column"])
+
+    if missing:
+        raise ValueError(
+            "Some filter columns were not found:\n"
+            + "\n".join(f"  - {col}" for col in missing)
+            + "\n\nAvailable columns:\n"
+            + "\n".join(f"  - {h}" for h in headers_original)
+        )
+
+
+def validate_output_columns(headers_norm_to_col, headers_original):
+    """
+    Checks that the two required output columns exist.
+    """
+    missing = []
+
+    for col in DEFAULT_OUTPUT_COLUMNS:
+        if norm(col) not in headers_norm_to_col:
+            missing.append(col)
+
+    if missing:
+        raise ValueError(
+            "The required output columns were not found:\n"
+            + "\n".join(f"  - {col}" for col in missing)
+            + "\n\nAvailable columns:\n"
+            + "\n".join(f"  - {h}" for h in headers_original)
+        )
+
+
 def row_matches_all_filters(ws, row, filters, headers_norm_to_col, match_mode="exact"):
     """
     Returns True only if the row matches all filters.
@@ -318,31 +358,25 @@ def row_matches_all_filters(ws, row, filters, headers_norm_to_col, match_mode="e
     return True
 
 
-def validate_filter_columns(filters, headers_norm_to_col, headers_original):
-    missing = []
-
-    for item in filters:
-        if norm(item["column"]) not in headers_norm_to_col:
-            missing.append(item["column"])
-
-    if missing:
-        raise ValueError(
-            "Some filter columns were not found:\n"
-            + "\n".join(f"  - {col}" for col in missing)
-            + "\n\nAvailable columns:\n"
-            + "\n".join(f"  - {h}" for h in headers_original)
-        )
-
+# ------------------------------------------------------------
+# Main filtering function
+# ------------------------------------------------------------
 
 def filter_excel_general(
     input_excel,
     filters,
     output_csv=None,
-    output_dir=".",
+    output_dir="outputs",
     sheet_name=None,
-    output_columns=None,
     match_mode="exact",
 ):
+    """
+    Filter Excel rows by one or multiple filters.
+
+    The output CSV always contains only:
+        NOMBRES Y APELLIDOS
+        CULTIVO A INSTALAR
+    """
     input_excel = Path(input_excel)
     output_dir = Path(output_dir)
 
@@ -365,21 +399,7 @@ def filter_excel_general(
     headers_norm_to_col, headers_original = get_headers(ws, header_row)
 
     validate_filter_columns(filters, headers_norm_to_col, headers_original)
-
-    selected_output_columns = parse_output_columns(output_columns, headers_original)
-
-    missing_output_columns = [
-        col for col in selected_output_columns
-        if norm(col) not in headers_norm_to_col
-    ]
-
-    if missing_output_columns:
-        raise ValueError(
-            "Some output columns were not found:\n"
-            + "\n".join(f"  - {col}" for col in missing_output_columns)
-            + "\n\nAvailable columns:\n"
-            + "\n".join(f"  - {h}" for h in headers_original)
-        )
+    validate_output_columns(headers_norm_to_col, headers_original)
 
     results = []
 
@@ -395,10 +415,11 @@ def filter_excel_general(
 
         output_row = {}
 
-        for col_name in selected_output_columns:
+        for col_name in DEFAULT_OUTPUT_COLUMNS:
             col_index = headers_norm_to_col[norm(col_name)]
             output_row[col_name] = ws.cell(row, col_index).value
 
+        # Skip empty rows
         if all(value in (None, "") for value in output_row.values()):
             continue
 
@@ -409,7 +430,7 @@ def filter_excel_general(
     with open(output_csv, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=selected_output_columns,
+            fieldnames=DEFAULT_OUTPUT_COLUMNS,
         )
 
         writer.writeheader()
@@ -434,14 +455,20 @@ def filter_excel_general(
         "match_mode": match_mode,
         "matches_found": len(results),
         "output_csv": str(output_csv),
-        "available_columns": headers_original,
-        "output_columns": selected_output_columns,
+        "output_columns": DEFAULT_OUTPUT_COLUMNS,
     }
 
 
+# ------------------------------------------------------------
+# Command-line interface
+# ------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Filter Excel rows by one or multiple columns and export selected columns to CSV."
+        description=(
+            "Filter Excel rows by one or multiple columns. "
+            "Output CSV always contains NOMBRES Y APELLIDOS and CULTIVO A INSTALAR."
+        )
     )
 
     parser.add_argument(
@@ -456,7 +483,8 @@ def main():
         required=True,
         help=(
             "Filter in COLUMN=VALUE format. "
-            "Can be repeated. Example: --filter DIST=AYAVIRI --filter PROV=MELGAR"
+            "Can be repeated. Example: "
+            '--filter "DIST=AYAVIRI" --filter "PROV=MELGAR"'
         ),
     )
 
@@ -482,15 +510,6 @@ def main():
     )
 
     parser.add_argument(
-        "--output-columns",
-        default="",
-        help=(
-            "Comma-separated output columns. "
-            "Empty means standard INIA columns. Use ALL for all detected columns."
-        ),
-    )
-
-    parser.add_argument(
         "--match-mode",
         choices=["exact", "contains"],
         default="exact",
@@ -508,7 +527,6 @@ def main():
         output_csv=args.output_csv,
         output_dir=args.output_dir,
         sheet_name=args.sheet,
-        output_columns=args.output_columns,
         match_mode=args.match_mode,
     )
 
