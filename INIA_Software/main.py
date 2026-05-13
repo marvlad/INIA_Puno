@@ -286,17 +286,15 @@ def main():
     # ------------------------------------------------------------
     # 9. Copy original input files into report directory
     # ------------------------------------------------------------
-
     print("\n[9] Copying input files to report directory")
 
-    copied_resultados_excel = copy_file_to_dir(
-        resultados_excel,
-        report_dir,
-    )
+    # Do not copy RESULTADOS Excel
+    copied_resultados_excel = None
 
+    # Keep this only if you still want to copy the template Excel
     copied_template_excel = copy_file_to_dir(
-        template_excel,
-        report_dir,
+      template_excel,
+      report_dir,
     )
 
     # ------------------------------------------------------------
