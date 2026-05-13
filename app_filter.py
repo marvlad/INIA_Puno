@@ -218,6 +218,7 @@ HTML = """
 
         <div class="small">
             Si deja este campo vacío, el nombre del archivo se generará usando los filtros.
+            Por ejemplo: <code>DIST_AYAVIRI.csv</code>.
         </div>
 
         <button type="submit">Generar CSV</button>
@@ -270,7 +271,7 @@ def safe_output_name(filename):
     """
     Make sure the output filename is safe and ends in .csv.
     """
-    filename = filename.strip()
+    filename = str(filename).strip()
 
     if not filename:
         filename = "filtered_output.csv"
@@ -281,6 +282,31 @@ def safe_output_name(filename):
         filename += ".csv"
 
     return filename
+
+
+def unique_output_path(folder, filename):
+    """
+    Return a unique output path.
+
+    If DIST_AYAVIRI.csv already exists, it creates:
+        DIST_AYAVIRI_2.csv
+        DIST_AYAVIRI_3.csv
+        etc.
+    """
+    folder = Path(folder)
+    filename = Path(filename).name
+
+    base = Path(filename).stem
+    suffix = Path(filename).suffix or ".csv"
+
+    candidate = folder / f"{base}{suffix}"
+    counter = 2
+
+    while candidate.exists():
+        candidate = folder / f"{base}_{counter}{suffix}"
+        counter += 1
+
+    return candidate
 
 
 @app.route("/", methods=["GET"])
@@ -336,8 +362,12 @@ def filter_excel():
         if not input_suffix:
             input_suffix = ".xlsx"
 
+        # Keep random ID only for uploaded Excel, to avoid conflicts.
         input_excel = UPLOAD_DIR / f"input_{run_id}{input_suffix}"
-        output_csv = OUTPUT_DIR / f"{run_id}_{output_name}"
+
+        # Output CSV uses clean name based on filters.
+        # If the same name already exists, it appends _2, _3, etc.
+        output_csv = unique_output_path(OUTPUT_DIR, output_name)
 
         uploaded_file.save(input_excel)
 
