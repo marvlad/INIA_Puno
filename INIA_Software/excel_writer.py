@@ -2,8 +2,6 @@
 
 from pathlib import Path
 import csv
-import time
-import subprocess
 
 from openpyxl import load_workbook
 
@@ -29,7 +27,8 @@ def read_vector_from_csv(csv_file):
         40
         50
 
-    3) A CSV with a column named value, dose, optimal, or kg_ha.
+    3) A CSV with a column named:
+        value, values, dose, dosis, optimal, kg_ha, kg/ha
     """
     csv_file = Path(csv_file)
 
@@ -39,9 +38,6 @@ def read_vector_from_csv(csv_file):
     values = []
 
     with open(csv_file, "r", encoding="utf-8-sig", newline="") as f:
-        sample = f.read(2048)
-        f.seek(0)
-
         # Try DictReader first
         reader = csv.DictReader(f)
 
@@ -66,7 +62,9 @@ def read_vector_from_csv(csv_file):
 
             for col in possible_columns:
                 if col in normalized_headers:
-                    selected_column = reader.fieldnames[normalized_headers.index(col)]
+                    selected_column = reader.fieldnames[
+                        normalized_headers.index(col)
+                    ]
                     break
 
             if selected_column is not None:
@@ -76,9 +74,12 @@ def read_vector_from_csv(csv_file):
                     if raw_value is None or str(raw_value).strip() == "":
                         continue
 
-                    values.append(float(str(raw_value).replace(",", ".").strip()))
+                    values.append(
+                        float(str(raw_value).replace(",", ".").strip())
+                    )
 
-                return values
+                if values:
+                    return values
 
         # If DictReader did not work, parse as normal CSV
         f.seek(0)
@@ -91,10 +92,10 @@ def read_vector_from_csv(csv_file):
                 if not item:
                     continue
 
-                # Skip obvious text headers
                 try:
                     values.append(float(item.replace(",", ".")))
                 except ValueError:
+                    # Skip headers or text
                     continue
 
     if not values:
@@ -120,26 +121,6 @@ def write_vector_to_excel(
 
     Default target:
         Nec_fert!C53:C57
-
-    Parameters
-    ----------
-    excel_file:
-        Input Excel file.
-
-    csv_file:
-        CSV file containing optimal values.
-
-    output_excel:
-        Output Excel file to save.
-
-    sheet_name:
-        Sheet where values should be written.
-
-    start_row:
-        First row where values should be written.
-
-    column:
-        Excel column where values should be written.
     """
     excel_file = Path(excel_file)
     csv_file = Path(csv_file)
@@ -180,58 +161,14 @@ def write_vector_to_excel(
 
 
 # ------------------------------------------------------------
-# Kill Excel if it is stuck
+# Recalculate Excel with xlwings
 # ------------------------------------------------------------
 
-def kill_excel_processes():
-    """
-    Force-close all Excel processes.
-
-    WARNING:
-    This closes every open Excel window on the computer.
-    Use only when running the batch and no other Excel files are open.
-    """
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "EXCEL.EXE"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-
-
-# ------------------------------------------------------------
-# Recalculate Excel safely with xlwings
-# ------------------------------------------------------------
-
-def recalculate_excel_with_xlwings(
-    excel_file,
-    max_retries=5,
-    wait_seconds=10,
-    kill_excel_on_retry=True,
-):
+def recalculate_excel_with_xlwings(excel_file):
     """
     Open an Excel file with xlwings, force recalculation, save, and close.
 
-    This safer version is useful for batch processing because Microsoft Excel
-    sometimes fails to open a workbook immediately after it was created,
-    especially if the file is inside Google Drive or another synced folder.
-
-    Parameters
-    ----------
-    excel_file:
-        Excel workbook to recalculate.
-
-    max_retries:
-        Number of attempts before failing.
-
-    wait_seconds:
-        Seconds to wait before opening and between retries.
-
-    kill_excel_on_retry:
-        If True, force-closes Excel after a failed attempt.
-
-        WARNING:
-        This closes all open Excel windows.
+    This is the simple working-style version.
     """
     import xlwings as xw
 
@@ -240,76 +177,34 @@ def recalculate_excel_with_xlwings(
     if not excel_file.exists():
         raise FileNotFoundError(f"Excel file not found: {excel_file}")
 
-    last_error = None
+    app = None
+    wb = None
 
-    for attempt in range(1, max_retries + 1):
-        app = None
+    try:
+        app = xw.App(visible=False, add_book=False)
+        app.display_alerts = False
+        app.screen_updating = False
+
+        wb = app.books.open(str(excel_file))
+
+        # Force Excel recalculation
+        app.calculate()
+
+        wb.save()
+        wb.close()
         wb = None
 
+        print(f"Recalculated and saved: {excel_file}")
+
+    finally:
         try:
-            print()
-            print(f"[Excel recalculation] Attempt {attempt}/{max_retries}")
-            print(f"Excel file: {excel_file}")
+            if wb is not None:
+                wb.close()
+        except Exception:
+            pass
 
-            # Important when file was just created/saved.
-            time.sleep(wait_seconds)
-
-            app = xw.App(visible=False, add_book=False)
-            app.display_alerts = False
-            app.screen_updating = False
-
-            wb = app.books.open(str(excel_file))
-
-            # Force recalculation.
-            app.calculate()
-
-            # Save and close cleanly.
-            wb.save()
-            wb.close()
-            wb = None
-
-            app.quit()
-            app = None
-
-            print(f"Recalculated and saved: {excel_file}")
-            return
-
-        except Exception as e:
-            last_error = e
-
-            print()
-            print("=" * 80)
-            print(f"WARNING: Excel recalculation failed on attempt {attempt}/{max_retries}")
-            print(f"File: {excel_file}")
-            print(f"Error: {e}")
-            print("=" * 80)
-
-            # Try to close workbook safely.
-            try:
-                if wb is not None:
-                    wb.close()
-            except Exception:
-                pass
-
-            # Try to quit Excel safely.
-            try:
-                if app is not None:
-                    app.quit()
-            except Exception:
-                pass
-
-            # Kill stuck Excel only after a failed attempt.
-            if kill_excel_on_retry:
-                print("Closing leftover Excel processes...")
-                kill_excel_processes()
-                time.sleep(3)
-
-            if attempt < max_retries:
-                print(f"Waiting {wait_seconds} seconds before retry...")
-                time.sleep(wait_seconds)
-
-    raise RuntimeError(
-        f"Excel recalculation failed after {max_retries} attempts.\n"
-        f"File: {excel_file}\n"
-        f"Last error: {last_error}"
-    )
+        try:
+            if app is not None:
+                app.quit()
+        except Exception:
+            pass
