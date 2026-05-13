@@ -4,7 +4,6 @@ import argparse
 from pathlib import Path
 
 from excel_builder import build_excel_from_template
-
 from excel_requirements import get_requirements_with_excel
 
 from optimizer import (
@@ -19,7 +18,6 @@ from excel_writer import (
 )
 
 from excel_to_pdf import export_excel_sheets_to_pdf
-
 from report_runner import generate_pdf_report
 
 from su_pdf_finder import (
@@ -30,7 +28,6 @@ from su_pdf_finder import (
 from utils import (
     safe_filename,
     make_report_directory,
-    copy_file_to_dir,
 )
 
 
@@ -121,7 +118,6 @@ def main():
     # ------------------------------------------------------------
     # Create central report directory
     # ------------------------------------------------------------
-
     report_dir = make_report_directory(
         args.report_root,
         args.name,
@@ -140,38 +136,31 @@ def main():
     # ------------------------------------------------------------
     # Output files
     # ------------------------------------------------------------
-
     base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
 
     filled_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_FILLED.xlsx"
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
+        f"{base_name}_FILLED.xlsx"
     )
 
     optimized_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_OPTIMIZED.xlsx"
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
+        f"{base_name}_OPTIMIZED.xlsx"
     )
 
     requirements_csv = report_dir / "requirements.csv"
     optimal_csv = report_dir / "optimal_values.csv"
 
-    excel_pdf = report_dir / (
-        f"Excel_Report_{base_name}.pdf"
-    )
-
-    output_pdf = report_dir / (
-        f"Informe_{base_name}.pdf"
-    )
+    excel_pdf = report_dir / f"Excel_Report_{base_name}.pdf"
+    output_pdf = report_dir / f"Informe_{base_name}.pdf"
 
     # Initialize variables for final summary
     generated_pdf = None
-    copied_resultados_excel = None
-    copied_template_excel = None
     copied_su_pdfs = []
 
     # ------------------------------------------------------------
     # 1. Build filled Excel from RESULTADOS + template
     # ------------------------------------------------------------
-
     print("\n[1] Building filled Excel from RESULTADOS + template")
 
     build_excel_from_template(
@@ -193,15 +182,18 @@ def main():
     # ------------------------------------------------------------
     # 2. Recalculate filled Excel before reading requirements
     # ------------------------------------------------------------
-
     print("\n[2] Recalculating filled Excel")
 
-    recalculate_excel_with_xlwings(filled_excel)
+    recalculate_excel_with_xlwings(
+        filled_excel,
+        max_retries=5,
+        wait_seconds=10,
+        kill_excel_on_retry=True,
+    )
 
     # ------------------------------------------------------------
     # 3. Read requirements from filled Excel: Nec_fert!J37:J42
     # ------------------------------------------------------------
-
     print("\n[3] Reading fertilizer requirements")
 
     requirements = get_requirements_with_excel(
@@ -212,7 +204,6 @@ def main():
     # ------------------------------------------------------------
     # 4. Optimize fertilizer values
     # ------------------------------------------------------------
-
     print("\n[4] Optimizing fertilizer doses")
 
     result = optimize_fertilizers(requirements)
@@ -230,7 +221,6 @@ def main():
     # ------------------------------------------------------------
     # 5. Write optimal values to final Excel: Nec_fert!C53:C57
     # ------------------------------------------------------------
-
     print("\n[5] Writing optimized doses to final Excel")
 
     write_vector_to_excel(
@@ -247,16 +237,19 @@ def main():
     # ------------------------------------------------------------
     # 6. Recalculate optimized Excel
     # ------------------------------------------------------------
-
     print("\n[6] Recalculating optimized Excel")
 
-    recalculate_excel_with_xlwings(optimized_excel)
+    recalculate_excel_with_xlwings(
+        optimized_excel,
+        max_retries=5,
+        wait_seconds=10,
+        kill_excel_on_retry=True,
+    )
 
     # ------------------------------------------------------------
     # 7. Export Excel sheets to PDF
-    #    Example: Gráfico_Int + Rec_fert -> 2-page PDF
+    # Example: Gráfico_Int + Rec_fert -> 2-page PDF
     # ------------------------------------------------------------
-
     print("\n[7] Exporting Excel sheets to PDF")
 
     export_excel_sheets_to_pdf(
@@ -273,7 +266,6 @@ def main():
     # ------------------------------------------------------------
     # 8. Generate PDF report using report_pdf.py
     # ------------------------------------------------------------
-
     print("\n[8] Generating PDF report")
 
     generated_pdf = generate_pdf_report(
@@ -284,24 +276,15 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 9. Copy original input files into report directory
+    # 9. Do not copy original input Excel files
     # ------------------------------------------------------------
-    print("\n[9] Copying input files to report directory")
-
-    # Do not copy RESULTADOS Excel
-    copied_resultados_excel = None
-
-    # Keep this only if you still want to copy the template Excel
-    copied_template_excel = copy_file_to_dir(
-      template_excel,
-      report_dir,
-    )
+    print("\n[9] Skipping copy of original input Excel files")
+    print("RESULTADOS Excel and template Excel will not be copied to the report directory.")
 
     # ------------------------------------------------------------
     # 10. Get SU information from RESULTADOS Excel
-    #     Example CODIGO: SU723-ILL-24 -> SU number 723, year 24
+    # Example CODIGO: SU723-ILL-24 -> SU number 723, year 24
     # ------------------------------------------------------------
-
     if args.pdf_folder:
         print("\n[10] Getting SU information from RESULTADOS Excel")
 
@@ -322,13 +305,13 @@ def main():
             args.pdf_folder,
             report_dir,
         )
+
     else:
         print("\nNo --pdf-folder provided. Skipping original SU PDF search.")
 
     # ------------------------------------------------------------
     # Final summary
     # ------------------------------------------------------------
-
     print("\n" + "=" * 80)
     print("DONE")
     print("=" * 80)
@@ -339,13 +322,12 @@ def main():
     print("\nGenerated/copied files:")
 
     files_to_show = [
-      requirements_csv,
-      optimal_csv,
-      copied_template_excel,
-      filled_excel,
-      optimized_excel,
-      excel_pdf,
-      generated_pdf,
+        requirements_csv,
+        optimal_csv,
+        filled_excel,
+        optimized_excel,
+        excel_pdf,
+        generated_pdf,
     ]
 
     for file_path in files_to_show:
