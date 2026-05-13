@@ -339,14 +339,13 @@ def main():
     print("\nGenerated/copied files:")
 
     files_to_show = [
-        requirements_csv,
-        optimal_csv,
-        copied_resultados_excel,
-        copied_template_excel,
-        filled_excel,
-        optimized_excel,
-        excel_pdf,
-        generated_pdf,
+      requirements_csv,
+      optimal_csv,
+      copied_template_excel,
+      filled_excel,
+      optimized_excel,
+      excel_pdf,
+      generated_pdf,
     ]
 
     for file_path in files_to_show:
