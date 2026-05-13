@@ -1,4 +1,4 @@
-# test_original_template.py
+# test_original_template_no_links.py
 
 from pathlib import Path
 import xlwings as xw
@@ -6,12 +6,6 @@ import xlwings as xw
 template = Path(
     r"D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx"
 )
-
-print("Testing original template:")
-print(template)
-
-if not template.exists():
-    raise FileNotFoundError(f"Template not found: {template}")
 
 app = None
 wb = None
@@ -21,10 +15,14 @@ try:
     app.display_alerts = False
     app.screen_updating = False
 
-    wb = app.books.open(str(template))
+    wb = app.books.open(
+        str(template),
+        update_links=False,
+        read_only=False,
+    )
 
-    print("SUCCESS: Excel opened the original template.")
-    print("Workbook name:", wb.name)
+    print("SUCCESS: opened without updating external links")
+    print("Workbook:", wb.name)
 
 finally:
     try:
