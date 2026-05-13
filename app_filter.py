@@ -157,6 +157,14 @@ HTML = """
             margin-top: 12px;
             border: 1px solid #f0d38a;
         }
+
+        .output-box {
+            background: #eefaf0;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+            border: 1px solid #b7dfbd;
+        }
     </style>
 </head>
 
@@ -169,6 +177,13 @@ HTML = """
         Por ejemplo: <code>DIST</code>, <code>PROV</code>,
         <code>CULTIVO A INSTALAR</code>, <code>ESTADO</code>,
         <code>LABORATORIO</code>, etc.
+    </div>
+
+    <div class="output-box">
+        <b>Salida del CSV:</b><br>
+        El archivo generado siempre tendrá solamente estas dos columnas:<br>
+        <code>NOMBRES Y APELLIDOS</code><br>
+        <code>CULTIVO A INSTALAR</code>
     </div>
 
     <form method="post" action="/filter" enctype="multipart/form-data">
@@ -197,15 +212,6 @@ HTML = """
 
         <label>Nombre de hoja, opcional</label>
         <input type="text" name="sheet" placeholder="Dejar vacío para buscar automáticamente">
-
-        <label>Columnas de salida</label>
-        <input type="text" name="output_columns" value="">
-
-        <div class="small">
-            Deje vacío para exportar las columnas estándar INIA.
-            Escriba <code>ALL</code> para exportar todas las columnas encontradas.
-            O escriba columnas específicas separadas por coma.
-        </div>
 
         <label>Nombre del CSV de salida, opcional</label>
         <input type="text" name="output_name" value="" placeholder="Dejar vacío para generar nombre automático">
@@ -261,6 +267,9 @@ HTML = """
 
 
 def safe_output_name(filename):
+    """
+    Make sure the output filename is safe and ends in .csv.
+    """
     filename = filename.strip()
 
     if not filename:
@@ -312,7 +321,6 @@ def filter_excel():
         sheet = request.form.get("sheet", "").strip()
         sheet = sheet if sheet else None
 
-        output_columns = request.form.get("output_columns", "").strip()
         match_mode = request.form.get("match_mode", "exact").strip()
 
         manual_output_name = request.form.get("output_name", "").strip()
@@ -339,7 +347,6 @@ def filter_excel():
             output_csv=output_csv,
             output_dir=OUTPUT_DIR,
             sheet_name=sheet,
-            output_columns=output_columns,
             match_mode=match_mode,
         )
 
