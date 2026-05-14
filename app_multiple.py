@@ -61,10 +61,10 @@ current_run = {
 
 HTML = """
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="utf-8">
-    <title>INIA Batch Report Generator</title>
+    <title>Generador de Reportes INIA</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -146,6 +146,7 @@ HTML = """
         .small {
             color: #666;
             font-size: 13px;
+            margin-top: 4px;
         }
 
         .warning {
@@ -154,69 +155,93 @@ HTML = """
             border-radius: 8px;
             margin-top: 12px;
         }
+
+        .section-title {
+            margin-top: 26px;
+            padding-top: 10px;
+            border-top: 1px solid #ddd;
+        }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>INIA Batch Report Generator</h1>
+    <h1>Generador de Reportes INIA</h1>
 
     <p>
-        Select the CSV file and click <b>Run batch</b>. The app will call
-        <code>run_main_from_csv_parallel.py</code> automatically.
+        Selecciona el archivo CSV de entrada y haz clic en <b>Ejecutar lote</b>.
+        La aplicación ejecutará automáticamente
+        <code>run_main_from_csv_parallel.py</code>.
     </p>
 
     <div class="warning">
-        Recommended settings for Excel/xlwings stability:
-        <b>Workers = 1</b>, <b>Delay = 10 seconds</b>, <b>Retries = 2</b>.
+        Configuración recomendada para estabilidad de Excel/xlwings:
+        <b>Workers = 1</b>, <b>Delay = 10 segundos</b>, <b>Retries = 2</b>.
     </div>
 
     {% if running %}
         <div class="status">
-            <b>Status:</b> Running<br>
+            <b>Estado:</b> Ejecutando<br>
             <b>Run ID:</b> {{ run_id }}
         </div>
     {% elif finished %}
         <div class="status">
-            <b>Status:</b> Finished<br>
-            <b>Return code:</b> {{ returncode }}<br>
+            <b>Estado:</b> Finalizado<br>
+            <b>Código de retorno:</b> {{ returncode }}<br>
             <b>Run ID:</b> {{ run_id }}
         </div>
     {% else %}
         <div class="status">
-            <b>Status:</b> Ready
+            <b>Estado:</b> Listo
         </div>
     {% endif %}
 
     <form action="/run" method="post" enctype="multipart/form-data">
-        <label>Input CSV</label>
+
+        <h3 class="section-title">Archivos principales</h3>
+
+        <label>Archivo CSV de entrada</label>
         <input type="file" name="input_csv" accept=".csv" required>
 
-        <label>Batch script</label>
+        <label>Excel Base de Datos</label>
+        <input type="file" name="resultados_excel_file" accept=".xlsx,.xlsm,.xls">
+        <div class="small">
+            Si no seleccionas un archivo, se usará esta ruta:
+        </div>
+        <input type="text" name="resultados_excel" value="{{ defaults.resultados_excel }}">
+
+        <label>Plantilla de Excel</label>
+        <input type="file" name="template_excel_file" accept=".xlsx,.xlsm,.xls">
+        <div class="small">
+            Si no seleccionas un archivo, se usará esta ruta:
+        </div>
+        <input type="text" name="template_excel" value="{{ defaults.template_excel }}">
+
+        <h3 class="section-title">Scripts</h3>
+
+        <label>Script de ejecución por lote</label>
         <input type="text" name="batch_script" value="{{ defaults.batch_script }}">
 
         <div class="row">
             <div>
-                <label>Main script</label>
+                <label>Script principal</label>
                 <input type="text" name="main_script" value="{{ defaults.main_script }}">
             </div>
 
             <div>
-                <label>Report PDF script</label>
+                <label>Script para PDF final</label>
                 <input type="text" name="report_script" value="{{ defaults.report_script }}">
             </div>
         </div>
 
-        <label>RESULTADOS Excel</label>
-        <input type="text" name="resultados_excel" value="{{ defaults.resultados_excel }}">
+        <h3 class="section-title">Carpetas de salida y PDFs</h3>
 
-        <label>Template Excel</label>
-        <input type="text" name="template_excel" value="{{ defaults.template_excel }}">
-
-        <label>Report output folder</label>
+        <label>Carpeta de salida de reportes</label>
         <input type="text" name="report_root" value="{{ defaults.report_root }}">
 
-        <label>Original PDF folder</label>
+        <label>Carpeta de PDFs originales</label>
         <input type="text" name="pdf_folder" value="{{ defaults.pdf_folder }}">
+
+        <h3 class="section-title">Configuración de ejecución</h3>
 
         <div class="row">
             <div>
@@ -225,7 +250,7 @@ HTML = """
             </div>
 
             <div>
-                <label>Delay between jobs, seconds</label>
+                <label>Delay entre trabajos, segundos</label>
                 <input type="number" name="delay_between_jobs" value="{{ defaults.delay_between_jobs }}" min="0">
             </div>
         </div>
@@ -235,34 +260,47 @@ HTML = """
 
         <div class="checkbox">
             <input type="checkbox" name="kill_excel_before_retry" checked>
-            Kill Excel before retry
+            Cerrar Excel antes de reintentar
         </div>
 
         <div class="checkbox">
             <input type="checkbox" name="kill_excel_before_job">
-            Kill Excel before every job
-            <span class="small">(use only if Excel keeps freezing)</span>
+            Cerrar Excel antes de cada trabajo
+            <span class="small">(usar solo si Excel se congela constantemente)</span>
         </div>
 
         <button type="submit" {% if running %}disabled{% endif %}>
-            Run batch
+            Ejecutar lote
         </button>
     </form>
 
-    <h2>Live log</h2>
-    <pre id="logbox">Loading log...</pre>
+    <h2>Registro en vivo</h2>
+    <pre id="logbox">Cargando registro...</pre>
 </div>
 
 <script>
 function updateLog() {
-    fetch("/log")
+    fetch("/log?t=" + Date.now(), { cache: "no-store" })
         .then(response => response.json())
         .then(data => {
-            document.getElementById("logbox").textContent = data.log || "";
+            const logbox = document.getElementById("logbox");
+
+            const wasNearBottom =
+                logbox.scrollTop + logbox.clientHeight >= logbox.scrollHeight - 30;
+
+            logbox.textContent = data.log || "";
+
+            if (wasNearBottom) {
+                logbox.scrollTop = logbox.scrollHeight;
+            }
+        })
+        .catch(error => {
+            document.getElementById("logbox").textContent =
+                "Error leyendo el registro en vivo: " + error;
         });
 }
 
-setInterval(updateLog, 2000);
+setInterval(updateLog, 1000);
 updateLog();
 </script>
 
@@ -276,8 +314,9 @@ updateLog();
 # ------------------------------------------------------------
 
 def write_line(log_file, text):
-    with open(log_file, "a", encoding="utf-8") as f:
+    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
         f.write(text + "\n")
+        f.flush()
 
 
 def run_batch_in_background(command, log_file, run_id):
@@ -292,6 +331,9 @@ def run_batch_in_background(command, log_file, run_id):
     write_line(log_file, "")
 
     try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -300,6 +342,7 @@ def run_batch_in_background(command, log_file, run_id):
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            env=env,
         )
 
         with open(log_file, "a", encoding="utf-8", errors="replace") as f:
@@ -363,19 +406,53 @@ def run():
 
     batch_script = request.form.get("batch_script", DEFAULTS["batch_script"])
     main_script = request.form.get("main_script", DEFAULTS["main_script"])
-    resultados_excel = request.form.get("resultados_excel", DEFAULTS["resultados_excel"])
-    template_excel = request.form.get("template_excel", DEFAULTS["template_excel"])
     report_root = request.form.get("report_root", DEFAULTS["report_root"])
     pdf_folder = request.form.get("pdf_folder", DEFAULTS["pdf_folder"])
     report_script = request.form.get("report_script", DEFAULTS["report_script"])
     workers = request.form.get("workers", DEFAULTS["workers"])
-    delay_between_jobs = request.form.get("delay_between_jobs", DEFAULTS["delay_between_jobs"])
+    delay_between_jobs = request.form.get(
+        "delay_between_jobs",
+        DEFAULTS["delay_between_jobs"],
+    )
     retries = request.form.get("retries", DEFAULTS["retries"])
+
+    # ------------------------------------------------------------
+    # Optional uploaded Excel Base de Datos
+    # ------------------------------------------------------------
+
+    resultados_excel_file = request.files.get("resultados_excel_file")
+
+    if resultados_excel_file and resultados_excel_file.filename.strip():
+        resultados_path = run_dir / resultados_excel_file.filename
+        resultados_excel_file.save(resultados_path)
+        resultados_excel = str(resultados_path)
+    else:
+        resultados_excel = request.form.get(
+            "resultados_excel",
+            DEFAULTS["resultados_excel"],
+        )
+
+    # ------------------------------------------------------------
+    # Optional uploaded Excel template
+    # ------------------------------------------------------------
+
+    template_excel_file = request.files.get("template_excel_file")
+
+    if template_excel_file and template_excel_file.filename.strip():
+        template_path = run_dir / template_excel_file.filename
+        template_excel_file.save(template_path)
+        template_excel = str(template_path)
+    else:
+        template_excel = request.form.get(
+            "template_excel",
+            DEFAULTS["template_excel"],
+        )
 
     batch_logs_dir = run_dir / "batch_logs"
 
     command = [
         sys.executable,
+        "-u",
         batch_script,
 
         "--input-csv",
@@ -443,15 +520,34 @@ def log():
     log_file = current_run.get("log_file")
 
     if not log_file or not Path(log_file).exists():
-        return jsonify({"log": "No log yet."})
+        response = jsonify({"log": "No log yet."})
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     try:
-        text = Path(log_file).read_text(encoding="utf-8", errors="replace")
+        path = Path(log_file)
+
+        # Read only the last 200 KB so the browser does not freeze
+        max_bytes = 200_000
+
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            raw = f.read()
+
+        text = raw.decode("utf-8", errors="replace")
+
+        if size > max_bytes:
+            text = "... showing last part of log ...\n\n" + text
+
     except Exception as e:
         text = f"Could not read log: {e}"
 
-    return jsonify({"log": text})
+    response = jsonify({"log": text})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, threaded=True)
