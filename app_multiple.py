@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 DEFAULTS = {
     "batch_script": str(BASE_DIR / "run_main_from_csv_parallel.py"),
-    "main_script": str(BASE_DIR / "main.py"),
+    "main_script": str(BASE_DIR / "INIA_Software\main.py"),
     "resultados_excel": r"D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\RESULTADOS USUARIOS 2M_Illpa 2.0.2.xlsx",
     "template_excel": r"D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx",
     "report_root": r"G:\Mi unidad\REPORTES_GENERADOS",
