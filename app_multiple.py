@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 DEFAULTS = {
     "batch_script": str(BASE_DIR / "run_main_from_csv_parallel.py"),
-    "main_script": str(BASE_DIR / "INIA_Software/main.py"),
+    "main_script": str(BASE_DIR / "main.py"),
     "resultados_excel": r"D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\RESULTADOS USUARIOS 2M_Illpa 2.0.2.xlsx",
     "template_excel": r"D:\INIA_CODE\INIA_Puno_Software_v1.0.0.2\INIA_Software\Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx",
     "report_root": r"G:\Mi unidad\REPORTES_GENERADOS",
@@ -52,6 +52,8 @@ current_run = {
     "started_at": None,
     "finished_at": None,
     "command": None,
+    "process": None,
+    "stop_requested": False,
 }
 
 
@@ -124,6 +126,16 @@ HTML = """
 
         button:disabled {
             background: #999;
+            cursor: not-allowed;
+        }
+
+        .stop-button {
+            background: #dc3545;
+            margin-left: 10px;
+        }
+
+        .stop-button:hover {
+            background: #bb2d3b;
         }
 
         .status {
@@ -272,6 +284,12 @@ HTML = """
         <button type="submit" {% if running %}disabled{% endif %}>
             Ejecutar lote
         </button>
+
+        {% if running %}
+            <button type="button" class="stop-button" onclick="stopRun()">
+                Detener ejecución
+            </button>
+        {% endif %}
     </form>
 
     <h2>Registro en vivo</h2>
@@ -298,6 +316,30 @@ function updateLog() {
             document.getElementById("logbox").textContent =
                 "Error leyendo el registro en vivo: " + error;
         });
+}
+
+function stopRun() {
+    if (!confirm("¿Seguro que deseas detener la ejecución actual?")) {
+        return;
+    }
+
+    fetch("/stop", {
+        method: "POST",
+        cache: "no-store"
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(data.message || "Solicitud de detención enviada.");
+        updateLog();
+
+        // Reload page so the button/status updates
+        setTimeout(() => {
+            window.location.reload();
+        }, 700);
+    })
+    .catch(error => {
+        alert("Error al detener: " + error);
+    });
 }
 
 setInterval(updateLog, 1000);
@@ -345,6 +387,8 @@ def run_batch_in_background(command, log_file, run_id):
             env=env,
         )
 
+        current_run["process"] = process
+
         with open(log_file, "a", encoding="utf-8", errors="replace") as f:
             for line in process.stdout:
                 f.write(line)
@@ -358,9 +402,22 @@ def run_batch_in_background(command, log_file, run_id):
         write_line(log_file, "ERROR running batch:")
         write_line(log_file, str(e))
 
+    # If the user already stopped it from /stop, do not overwrite too much
+    if current_run.get("stop_requested"):
+        current_run["running"] = False
+        current_run["returncode"] = -999
+        current_run["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        current_run["process"] = None
+
+        write_line(log_file, "")
+        write_line(log_file, "-" * 80)
+        write_line(log_file, "Stopped by user.")
+        return
+
     current_run["running"] = False
     current_run["returncode"] = returncode
     current_run["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    current_run["process"] = None
 
     write_line(log_file, "")
     write_line(log_file, "-" * 80)
@@ -503,6 +560,8 @@ def run():
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "finished_at": None,
         "command": command,
+        "process": None,
+        "stop_requested": False,
     }
 
     thread = threading.Thread(
@@ -513,6 +572,69 @@ def run():
     thread.start()
 
     return redirect(url_for("index"))
+
+
+@app.route("/stop", methods=["POST"])
+def stop():
+    global current_run
+
+    if not current_run["running"]:
+        return jsonify({
+            "ok": False,
+            "message": "No hay una ejecución activa."
+        })
+
+    process = current_run.get("process")
+    log_file = current_run.get("log_file")
+
+    current_run["stop_requested"] = True
+
+    if log_file:
+        write_line(log_file, "")
+        write_line(log_file, "STOP requested from web interface.")
+        write_line(log_file, "")
+
+    if process is None:
+        current_run["running"] = False
+        current_run["returncode"] = -999
+        current_run["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        return jsonify({
+            "ok": False,
+            "message": "No se encontró el proceso activo, pero se marcó como detenido."
+        })
+
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            process.terminate()
+
+        current_run["running"] = False
+        current_run["returncode"] = -999
+        current_run["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        current_run["process"] = None
+
+        if log_file:
+            write_line(log_file, "Execution stopped by user.")
+
+        return jsonify({
+            "ok": True,
+            "message": "Ejecución detenida."
+        })
+
+    except Exception as e:
+        if log_file:
+            write_line(log_file, f"ERROR stopping process: {e}")
+
+        return jsonify({
+            "ok": False,
+            "message": f"No se pudo detener la ejecución: {e}"
+        })
 
 
 @app.route("/log")
