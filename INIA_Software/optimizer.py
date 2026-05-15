@@ -16,6 +16,33 @@ def nutrient_apport(doses):
     return doses @ FORMULA
 
 
+def convert_difference_to_requirements(difference):
+    """
+    difference = SUMA_de_nutrientes - requerimiento_del_cultivo
+
+    If difference is positive:
+        There is already enough nutrient, so the optimizer should ignore it.
+
+    If difference is negative:
+        That nutrient is missing, so the optimizer should add fertilizer
+        until the missing amount is covered.
+
+    Example:
+        difference = [10, -20, 5, -30]
+        requirements = [0, 20, 0, 30]
+    """
+
+    difference = np.array(difference, dtype=float)
+
+    requirements = np.where(
+        difference < 0,
+        -difference,
+        0.0,
+    )
+
+    return requirements
+
+
 def final_remaining(doses, requirements):
     return requirements - nutrient_apport(doses)
 
@@ -28,11 +55,18 @@ def objective(doses, requirements):
 
     for i, req in enumerate(requirements):
         if req > 0:
+            # Nutrient is needed.
+            # Penalize excess, but constraints will force at least the target.
             excess = -remaining[i]
-            error += 10.0 * (excess / max(req, 1.0)) ** 2
+            if excess > 0:
+                error += 10.0 * (excess / max(req, 1.0)) ** 2
         else:
+            # Nutrient is not needed.
+            # Do not optimize this nutrient.
+            # But still lightly penalize adding unnecessary nutrients.
             error += 5.0 * apport[i] ** 2
 
+    # Small penalty to avoid unnecessarily large fertilizer doses
     error += 0.0001 * np.sum(doses ** 2)
 
     return error
@@ -55,7 +89,17 @@ def make_constraints(requirements):
     return constraints
 
 
-def optimize_fertilizers(requirements):
+def optimize_fertilizers(difference):
+    """
+    Input:
+        difference = SUMA_de_nutrientes - requerimiento_del_cultivo
+
+    Positive values are assumed as zero.
+    Negative values are converted into fertilizer requirements.
+    """
+
+    requirements = convert_difference_to_requirements(difference)
+
     bounds = [
         (0, 6000),
         (0, 1000),
@@ -78,6 +122,9 @@ def optimize_fertilizers(requirements):
         },
     )
 
+    result.effective_requirements = requirements
+    result.original_difference = np.array(difference, dtype=float)
+
     return result
 
 
@@ -96,7 +143,9 @@ def save_optimal_values_csv(output_csv, result):
     return doses
 
 
-def print_optimization_results(requirements, result):
+def print_optimization_results(difference, result):
+    requirements = result.effective_requirements
+
     doses = result.x
     apport = nutrient_apport(doses)
     remaining = final_remaining(doses, requirements)
@@ -107,9 +156,18 @@ def print_optimization_results(requirements, result):
         print("WARNING: Optimization did not fully converge.")
         print(result.message)
 
-    print("\nInput requirements:")
-    for name, value in zip(NUTRIENTS, requirements):
-        print(f"  {name:5s}: {value:10.2f}")
+    print("\nOriginal difference:")
+    print("difference = SUMA_de_nutrientes - requerimiento_del_cultivo")
+    print("positive difference is assumed as zero")
+
+    for name, value in zip(NUTRIENTS, difference):
+        effective = max(-value, 0.0)
+
+        print(
+            f"  {name:5s}: "
+            f"difference = {value:10.2f}   "
+            f"effective requirement = {effective:10.2f}"
+        )
 
     print("\nOptimized fertilizer doses:")
     for name, old, new in zip(FERTILIZER_NAMES, CURRENT_DOSES, doses):
@@ -121,7 +179,7 @@ def print_optimization_results(requirements, result):
         )
 
     print("\nNutrient balance:")
-    print("remaining = requirement - fertilizer_apport")
+    print("remaining = effective_requirement - fertilizer_apport")
     print("remaining <= 0 means OK")
     print("remaining > 0 means still missing")
 
@@ -130,7 +188,7 @@ def print_optimization_results(requirements, result):
 
         print(
             f"  {name:5s}: "
-            f"requirement = {req:10.2f}   "
+            f"effective requirement = {req:10.2f}   "
             f"apport = {app:10.2f}   "
             f"remaining = {rem:10.2f}   "
             f"{status}"
