@@ -12,26 +12,46 @@ from config import (
 )
 
 
-def nutrient_apport(doses):
-    return doses @ FORMULA
+# Allowed excess above the required nutrient amount
+# Example: if requirement is 100, then apport up to 115 is OK
+EXCESS_TOLERANCE = 15.0
+
+
+# Fertilizer preference weights
+#
+# Optimization array order:
+# 0 = Estiércol de Vacuno
+# 1 = Urea
+# 2 = Fosfato Diamónico
+# 3 = Cloruro de Potasio
+# 4 = Sulfato de Potasio y Magnesio
+#
+# Smaller weight means the optimizer prefers that fertilizer.
+# Larger weight means the optimizer avoids that fertilizer unless needed.
+FERTILIZER_WEIGHTS = np.array([
+    0.05,  # Estiércol de Vacuno: preferred
+    2.00,  # Urea
+    2.00,  # Fosfato Diamónico
+    2.00,  # Cloruro de Potasio
+    2.00,  # Sulfato de Potasio y Magnesio
+])
 
 
 def effective_requirements(requirements):
     """
-    Keep only positive requirements.
+    Convert negative requirements to zero.
 
-    This assumes that requirements already represents:
+    This assumes that requirements already represents the missing amount:
 
-        requerimiento_del_cultivo - SUMA_de_nutrientes
+        requirement = requerimiento_del_cultivo - SUMA_de_nutrientes
 
     Therefore:
 
-        requirements > 0  means nutrient is missing
-        requirements = 0  means nutrient is balanced
-        requirements < 0  means SUMA already surpasses the requirement
-                          or crop requirement is negative
+        requirement > 0 means the nutrient is missing
+        requirement = 0 means nothing is missing
+        requirement < 0 means there is already excess
 
-    Negative values are ignored by converting them to zero.
+    Negative values are ignored.
     """
 
     requirements = np.array(requirements, dtype=float)
@@ -41,6 +61,10 @@ def effective_requirements(requirements):
         requirements,
         0.0,
     )
+
+
+def nutrient_apport(doses):
+    return doses @ FORMULA
 
 
 def final_remaining(doses, requirements):
@@ -59,15 +83,30 @@ def objective(doses, requirements):
 
     for i, req in enumerate(requirements):
         if req > 0:
+            # This nutrient is required.
+            # The constraint will force apport >= req.
+            # Here we only penalize excess above the tolerance.
             excess = -remaining[i]
+            # same as: excess = apport[i] - req
 
-            if excess > 0:
-                error += 10.0 * (excess / max(req, 1.0)) ** 2
+            if excess > EXCESS_TOLERANCE:
+                error += 10.0 * (
+                    (excess - EXCESS_TOLERANCE) / max(req, 1.0)
+                ) ** 2
 
         else:
+            # This nutrient is not required.
+            # Penalize adding nutrients that were not needed.
             error += 5.0 * apport[i] ** 2
 
-    error += 0.0001 * np.sum(doses ** 2)
+    # Dose penalty with fertilizer preference.
+    #
+    # Estiércol de Vacuno has a small weight, so the optimizer
+    # is more willing to use it.
+    #
+    # Chemical fertilizers have larger weights, so the optimizer
+    # uses them only when they are useful/necessary.
+    error += 0.0001 * np.sum(FERTILIZER_WEIGHTS * doses ** 2)
 
     return error
 
@@ -95,11 +134,11 @@ def optimize_fertilizers(requirements):
     requirements = effective_requirements(requirements)
 
     bounds = [
-        (0, 6000),
-        (0, 1000),
-        (0, 1000),
-        (0, 1000),
-        (0, 1000),
+        (0, 6000),  # Estiércol de Vacuno
+        (0, 1000),  # Urea
+        (0, 1000),  # Fosfato Diamónico
+        (0, 1000),  # Cloruro de Potasio
+        (0, 1000),  # Sulfato de Potasio y Magnesio
     ]
 
     result = minimize(
@@ -151,6 +190,7 @@ def print_optimization_results(requirements, result):
     print("\nInput requirements:")
     print("Only positive requirements are optimized.")
     print("Negative requirements are assumed as zero.")
+    print(f"Allowed excess tolerance: {EXCESS_TOLERANCE:.1f} kg/ha")
 
     for name, original, effective in zip(
         NUTRIENTS,
@@ -170,27 +210,38 @@ def print_optimization_results(requirements, result):
         )
 
     print("\nOptimized fertilizer doses:")
+    print("Estiércol de Vacuno is prioritized with a smaller penalty weight.")
 
     for name, old, new in zip(FERTILIZER_NAMES, CURRENT_DOSES, doses):
         print(
-            f"  {name:18s}: "
+            f"  {name:30s}: "
             f"{new:10.1f} kg/ha   "
             f"{new / 50:8.1f} sacos/ha   "
             f"change = {new - old:10.1f}"
         )
 
     print("\nNutrient balance:")
-    print("remaining = effective_requirement - fertilizer_apport")
+    print("remaining = requirement - fertilizer_apport")
     print("remaining <= 0 means OK")
-    print("remaining > 0 means still missing")
+    print(f"excess up to {EXCESS_TOLERANCE:.1f} kg/ha is acceptable")
 
     for name, req, app, rem in zip(NUTRIENTS, requirements, apport, remaining):
-        status = "OK" if rem <= 1e-6 else "MISSING"
+        excess = app - req
+
+        if req <= 0:
+            status = "IGNORED"
+        elif rem > 1e-6:
+            status = "MISSING"
+        elif excess <= EXCESS_TOLERANCE:
+            status = "OK"
+        else:
+            status = "OK, HIGH EXCESS"
 
         print(
             f"  {name:5s}: "
             f"requirement = {req:10.2f}   "
             f"apport = {app:10.2f}   "
             f"remaining = {rem:10.2f}   "
+            f"excess = {excess:10.2f}   "
             f"{status}"
         )
