@@ -13,171 +13,86 @@ from config import (
 
 
 def nutrient_apport(doses):
-    """
-    Calculate nutrient contribution from fertilizer doses.
-
-    doses:
-        Vector of fertilizer doses in kg/ha.
-
-    FORMULA:
-        Matrix with fertilizer composition.
-
-    Returns:
-        Nutrient apport vector.
-    """
-
     return doses @ FORMULA
 
 
-def convert_to_effective_requirements(suma_nutrientes, requerimiento_cultivo):
+def effective_requirements(requirements):
     """
-    Convert the original nutrient balance into optimizer targets.
+    Keep only positive requirements.
 
-    Rules:
+    This assumes that requirements already represents:
 
-    1. If requerimiento_cultivo <= 0:
-       Ignore this nutrient.
-       effective requirement = 0
+        requerimiento_del_cultivo - SUMA_de_nutrientes
 
-    2. If suma_nutrientes >= requerimiento_cultivo:
-       The nutrient requirement is already covered.
-       effective requirement = 0
+    Therefore:
 
-    3. If suma_nutrientes < requerimiento_cultivo:
-       The missing amount is:
-       requerimiento_cultivo - suma_nutrientes
+        requirements > 0  means nutrient is missing
+        requirements = 0  means nutrient is balanced
+        requirements < 0  means SUMA already surpasses the requirement
+                          or crop requirement is negative
 
-    In other words, the optimizer only sees the missing nutrients.
+    Negative values are ignored by converting them to zero.
     """
 
-    suma_nutrientes = np.array(suma_nutrientes, dtype=float)
-    requerimiento_cultivo = np.array(requerimiento_cultivo, dtype=float)
+    requirements = np.array(requirements, dtype=float)
 
-    if suma_nutrientes.shape != requerimiento_cultivo.shape:
-        raise ValueError(
-            "suma_nutrientes and requerimiento_cultivo must have the same shape. "
-            f"Got {suma_nutrientes.shape} and {requerimiento_cultivo.shape}."
-        )
-
-    effective_requirements = np.where(
-        (requerimiento_cultivo > 0)
-        & (suma_nutrientes < requerimiento_cultivo),
-        requerimiento_cultivo - suma_nutrientes,
+    return np.where(
+        requirements > 0,
+        requirements,
         0.0,
     )
 
-    return effective_requirements
+
+def final_remaining(doses, requirements):
+    requirements = effective_requirements(requirements)
+
+    return requirements - nutrient_apport(doses)
 
 
-def final_remaining(doses, effective_requirements):
-    """
-    remaining = effective_requirement - fertilizer_apport
-
-    remaining <= 0 means OK.
-    remaining > 0 means still missing.
-    """
-
-    return effective_requirements - nutrient_apport(doses)
-
-
-def objective(doses, effective_requirements):
-    """
-    Objective function minimized by scipy.
-
-    It tries to:
-    1. Cover nutrients that are missing.
-    2. Avoid unnecessary excess.
-    3. Avoid very large fertilizer doses.
-    """
+def objective(doses, requirements):
+    requirements = effective_requirements(requirements)
 
     apport = nutrient_apport(doses)
-    remaining = effective_requirements - apport
+    remaining = requirements - apport
 
     error = 0.0
 
-    for i, req in enumerate(effective_requirements):
+    for i, req in enumerate(requirements):
         if req > 0:
-            # This nutrient is missing and must be covered.
-            # Constraints force apport >= req.
-            # Here we penalize excess.
             excess = -remaining[i]
 
             if excess > 0:
                 error += 10.0 * (excess / max(req, 1.0)) ** 2
 
         else:
-            # This nutrient is ignored because:
-            # - crop requirement was <= 0, or
-            # - suma already surpassed the crop requirement.
-            #
-            # We do not force this nutrient.
-            # But we lightly penalize adding unnecessary amounts.
             error += 5.0 * apport[i] ** 2
 
-    # Small penalty to avoid unnecessarily large fertilizer doses.
     error += 0.0001 * np.sum(doses ** 2)
 
     return error
 
 
-def make_constraints(effective_requirements):
-    """
-    Create constraints only for nutrients that are actually missing.
-
-    For each nutrient where effective_requirement > 0:
-
-        fertilizer_apport >= effective_requirement
-    """
+def make_constraints(requirements):
+    requirements = effective_requirements(requirements)
 
     constraints = []
 
-    for i, req in enumerate(effective_requirements):
+    for i, req in enumerate(requirements):
         if req > 0:
-
             def constraint_fun(doses, nutrient_index=i, target=req):
                 apport = nutrient_apport(doses)
                 return apport[nutrient_index] - target
 
-            constraints.append(
-                {
-                    "type": "ineq",
-                    "fun": constraint_fun,
-                }
-            )
+            constraints.append({
+                "type": "ineq",
+                "fun": constraint_fun,
+            })
 
     return constraints
 
 
-def optimize_fertilizers(suma_nutrientes, requerimiento_cultivo):
-    """
-    Optimize fertilizer doses.
-
-    Inputs:
-        suma_nutrientes:
-            Current nutrient sum available before adding fertilizer.
-
-        requerimiento_cultivo:
-            Crop nutrient requirement.
-
-    The optimizer does not use requerimiento_cultivo directly.
-    It first converts it into effective requirements:
-
-        effective_requirements =
-            requerimiento_cultivo - suma_nutrientes
-
-    but only when:
-
-        requerimiento_cultivo > 0
-        and
-        suma_nutrientes < requerimiento_cultivo
-
-    Otherwise the effective requirement is zero.
-    """
-
-    effective_requirements = convert_to_effective_requirements(
-        suma_nutrientes,
-        requerimiento_cultivo,
-    )
+def optimize_fertilizers(requirements):
+    requirements = effective_requirements(requirements)
 
     bounds = [
         (0, 6000),
@@ -190,10 +105,10 @@ def optimize_fertilizers(suma_nutrientes, requerimiento_cultivo):
     result = minimize(
         objective,
         CURRENT_DOSES,
-        args=(effective_requirements,),
+        args=(requirements,),
         method="SLSQP",
         bounds=bounds,
-        constraints=make_constraints(effective_requirements),
+        constraints=make_constraints(requirements),
         options={
             "maxiter": 3000,
             "ftol": 1e-12,
@@ -201,21 +116,10 @@ def optimize_fertilizers(suma_nutrientes, requerimiento_cultivo):
         },
     )
 
-    # Store extra useful information inside result
-    result.suma_nutrientes = np.array(suma_nutrientes, dtype=float)
-    result.requerimiento_cultivo = np.array(requerimiento_cultivo, dtype=float)
-    result.effective_requirements = effective_requirements
-
     return result
 
 
 def save_optimal_values_csv(output_csv, result):
-    """
-    Save optimized fertilizer doses into a CSV file.
-
-    The output is one row with one column per fertilizer.
-    """
-
     doses = np.round(result.x, 1)
 
     df = pd.DataFrame(
@@ -230,18 +134,13 @@ def save_optimal_values_csv(output_csv, result):
     return doses
 
 
-def print_optimization_results(result):
-    """
-    Print optimization summary.
-    """
-
-    suma_nutrientes = result.suma_nutrientes
-    requerimiento_cultivo = result.requerimiento_cultivo
-    effective_requirements = result.effective_requirements
+def print_optimization_results(requirements, result):
+    original_requirements = np.array(requirements, dtype=float)
+    requirements = effective_requirements(requirements)
 
     doses = result.x
     apport = nutrient_apport(doses)
-    remaining = final_remaining(doses, effective_requirements)
+    remaining = final_remaining(doses, requirements)
 
     print("\n[2] Optimization results")
 
@@ -249,28 +148,25 @@ def print_optimization_results(result):
         print("WARNING: Optimization did not fully converge.")
         print(result.message)
 
-    print("\nOriginal nutrient balance before fertilizer optimization:")
-    print("Only nutrients with positive crop requirement and deficit are optimized.")
+    print("\nInput requirements:")
+    print("Only positive requirements are optimized.")
+    print("Negative requirements are assumed as zero.")
 
-    for name, suma, req, eff in zip(
+    for name, original, effective in zip(
         NUTRIENTS,
-        suma_nutrientes,
-        requerimiento_cultivo,
-        effective_requirements,
+        original_requirements,
+        requirements,
     ):
-        if req <= 0:
-            reason = "IGNORED: crop requirement <= 0"
-        elif suma >= req:
-            reason = "IGNORED: already covered"
+        if original <= 0:
+            status = "IGNORED"
         else:
-            reason = "OPTIMIZED: missing nutrient"
+            status = "OPTIMIZED"
 
         print(
             f"  {name:5s}: "
-            f"suma = {suma:10.2f}   "
-            f"requirement = {req:10.2f}   "
-            f"effective requirement = {eff:10.2f}   "
-            f"{reason}"
+            f"original = {original:10.2f}   "
+            f"effective = {effective:10.2f}   "
+            f"{status}"
         )
 
     print("\nOptimized fertilizer doses:")
@@ -283,23 +179,18 @@ def print_optimization_results(result):
             f"change = {new - old:10.1f}"
         )
 
-    print("\nNutrient balance after optimized fertilizer:")
+    print("\nNutrient balance:")
     print("remaining = effective_requirement - fertilizer_apport")
     print("remaining <= 0 means OK")
     print("remaining > 0 means still missing")
 
-    for name, req, app, rem in zip(
-        NUTRIENTS,
-        effective_requirements,
-        apport,
-        remaining,
-    ):
+    for name, req, app, rem in zip(NUTRIENTS, requirements, apport, remaining):
         status = "OK" if rem <= 1e-6 else "MISSING"
 
         print(
             f"  {name:5s}: "
-            f"effective requirement = {req:10.2f}   "
-            f"fertilizer apport = {app:10.2f}   "
+            f"requirement = {req:10.2f}   "
+            f"apport = {app:10.2f}   "
             f"remaining = {rem:10.2f}   "
             f"{status}"
         )
