@@ -16,7 +16,7 @@ from config import (
 # Fertilizer dose bounds
 # ------------------------------------------------------------
 ESTIERCOL_MIN = 4000.0
-ESTIERCOL_MAX = 6000.0
+ESTIERCOL_MAX = 10000.0
 
 OTHER_FERTILIZER_MIN = 0.0
 OTHER_FERTILIZER_MAX = 1000.0
@@ -182,31 +182,17 @@ def make_constraints(requirements):
 
 def solve_linear_program(requirements):
     """
-    Linear programming optimizer.
+    Linear programming optimizer with elastic slacks to guarantee a solution always exists.
 
-    Variables:
-
+    Variables setup:
         x[0] = Estiércol de Vacuno
         x[1] = Urea
         x[2] = Fosfato Diamónico
         x[3] = Cloruro de Potasio
         x[4] = Sulfato de Potasio y Magnesio
 
-        x[5]  = excess N
-        x[6]  = excess P2O5
-        x[7]  = excess K2O
-        x[8]  = excess CaO
-        x[9]  = excess MgO
-        x[10] = excess S
-
-    Main hard rule:
-
-        supplied_i >= required_i
-
-    Soft rule:
-
-        excess_i is minimized in the objective,
-        but it is not forbidden.
+        x[5] to x[10]  = excess N, P2O5, K2O, CaO, MgO, S
+        x[11] to x[16] = deficit slacks for N, P2O5, K2O, CaO, MgO, S (Safety net variables)
     """
 
     requirements = effective_requirements(requirements)
@@ -215,15 +201,12 @@ def solve_linear_program(requirements):
     n_fertilizers = len(FERTILIZER_NAMES)
     n_nutrients = len(NUTRIENTS)
 
-    n_variables = n_fertilizers + n_nutrients
+    # Expanded to include n_nutrients deficit slack variables
+    n_variables = n_fertilizers + (2 * n_nutrients)
 
     # ------------------------------------------------------------
     # Objective vector
-    #
-    # Minimize:
-    #
-    #   fertilizer cost/preference
-    #   + excess nutrient penalties
+    # Minimize preference costs + excess penalty + massive deficit penalty
     # ------------------------------------------------------------
     c = np.zeros(n_variables)
 
@@ -231,52 +214,43 @@ def solve_linear_program(requirements):
     c[:n_fertilizers] = FERTILIZER_WEIGHTS
 
     # Nutrient excess penalty
-    c[n_fertilizers:] = EXCESS_WEIGHTS
+    c[n_fertilizers : n_fertilizers + n_nutrients] = EXCESS_WEIGHTS
+
+    # Nutrient deficit slack penalty (Very high number to prevent it from activating unless needed)
+    DEFICIT_PENALTY = 10000.0
+    c[n_fertilizers + n_nutrients :] = DEFICIT_PENALTY
 
     A_ub = []
     b_ub = []
 
     for i, req in enumerate(requirements):
-
         nutrient_vector = formula[:, i]
 
         # --------------------------------------------------------
-        # Hard lower constraint for required nutrients:
+        # Elastic lower constraint for required nutrients:
+        # supplied_i + deficit_slack_i >= required_i
         #
-        #   supplied_i >= required_i
-        #
-        # linprog only accepts:
-        #
-        #   A_ub @ x <= b_ub
-        #
-        # Therefore:
-        #
-        #   -supplied_i <= -required_i
-        #
-        # We apply this only if req > 0.
-        # If req = 0, it is not required.
+        # Re-written as standard linprog form (<=):
+        # -supplied_i - deficit_slack_i <= -required_i
         # --------------------------------------------------------
         if req > 0:
             row = np.zeros(n_variables)
             row[:n_fertilizers] = -nutrient_vector
+            row[n_fertilizers + n_nutrients + i] = -1.0  # Deficit slack variable slot
 
             A_ub.append(row)
             b_ub.append(-req)
 
         # --------------------------------------------------------
-        # Excess variable definition:
+        # Excess variable evaluation structure:
+        # excess_i >= supplied_i - required_i
         #
-        #   excess_i >= supplied_i - required_i
-        #
-        # Equivalent:
-        #
-        #   supplied_i - excess_i <= required_i
-        #
-        # This lets linprog minimize excess in the objective.
+        # Re-written as standard form (<=):
+        # supplied_i - excess_i <= required_i
         # --------------------------------------------------------
         row = np.zeros(n_variables)
         row[:n_fertilizers] = nutrient_vector
-        row[n_fertilizers + i] = -1.0
+        row[n_fertilizers + i] = -1.0  # Excess variable slot
 
         A_ub.append(row)
         b_ub.append(req)
@@ -285,18 +259,22 @@ def solve_linear_program(requirements):
     b_ub = np.array(b_ub, dtype=float)
 
     # ------------------------------------------------------------
-    # Bounds
+    # Bounds setup
     # ------------------------------------------------------------
     bounds = []
 
-    # Fertilizers
-    bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))       # Estiércol
+    # Fertilizers Bounds
+    bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))                # Estiércol (4000 to 10000)
     bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Urea
     bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Fosfato Diamónico
     bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Cloruro de Potasio
     bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Sulfato K-Mg
 
-    # Excess variables
+    # Excess variables Bounds
+    for _ in range(n_nutrients):
+        bounds.append((0.0, None))
+
+    # Deficit slack variables Bounds
     for _ in range(n_nutrients):
         bounds.append((0.0, None))
 
@@ -312,13 +290,14 @@ def solve_linear_program(requirements):
         full_x = result.x.copy()
 
         doses = full_x[:n_fertilizers]
-        excess_variables = full_x[n_fertilizers:]
+        excess_variables = full_x[n_fertilizers : n_fertilizers + n_nutrients]
+        deficit_variables = full_x[n_fertilizers + n_nutrients :]
 
-        # Keep compatibility with your bigger code:
-        # result.x must contain only the 5 fertilizer doses.
+        # Maintain exact internal property signatures for external codes
         result.full_x = full_x
         result.x = doses
         result.excess_variables = excess_variables
+        result.deficit_variables = deficit_variables
 
     return result
 
@@ -328,9 +307,7 @@ def optimize_fertilizers(requirements):
     Optimize fertilizer doses using linear programming.
 
     This version does not use a hard upper tolerance.
-
     It only forces:
-
         supplied_i >= required_i
 
     Then it minimizes excess.
@@ -348,11 +325,6 @@ def optimize_fertilizers(requirements):
         print("  2. Fertilizer upper bounds are too low.")
         print("  3. Requirements are too high for available fertilizers.")
         print("  4. FORMULA matrix may be wrong or missing a nutrient column.")
-        print("\nThings to try:")
-        print("  - Lower ESTIERCOL_MIN from 4000 to 3000.")
-        print("  - Increase OTHER_FERTILIZER_MAX from 1000 to 2000.")
-        print("  - Check that FORMULA has shape (5, 6).")
-        print("  - Check that FORMULA columns are [N, P2O5, K2O, CaO, MgO, S].")
 
     return result
 
@@ -439,7 +411,7 @@ def print_optimization_results(requirements, result):
 
         if req > 0:
             if rem > 1e-6:
-                status = "MISSING"
+                status = "MISSING (BOUND LIMIT REACHED)"
                 all_required_covered = False
             elif exc > EXCESS_TOLERANCE + 1e-6:
                 status = "OK, HIGH EXCESS"
@@ -465,7 +437,7 @@ def print_optimization_results(requirements, result):
     if all_required_covered:
         print("  OK: all positive nutrient requirements are covered.")
     else:
-        print("  WARNING: at least one positive nutrient requirement is missing.")
+        print("  WARNING: at least one positive nutrient requirement could not be fully met within the specified maximum fertilizer limits.")
 
     print("\nDebug information:")
     print(f"  FORMULA shape: {np.array(FORMULA).shape}")
