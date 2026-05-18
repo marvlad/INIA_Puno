@@ -125,7 +125,7 @@ def make_constraints(requirements):
             constraints.append({
                 "type": "ineq",
                 "fun": constraint_fun,
-            })
+                })
 
     return constraints
 
@@ -133,12 +133,15 @@ def make_constraints(requirements):
 def optimize_fertilizers(requirements):
     requirements = effective_requirements(requirements)
 
+    # Modified bounds to treat Estiércol de Vacuno as a fixed minimum base (4000)
+    # up to an organic recommendation ceiling (5000). 
+    # Remaining chemical choices are left for Urea and Fosfato Diamónico to close gaps.
     bounds = [
-        (0, 6000),  # Estiércol de Vacuno
-        (0, 1000),  # Urea
-        (0, 1000),  # Fosfato Diamónico
-        (0, 1000),  # Cloruro de Potasio
-        (0, 1000),  # Sulfato de Potasio y Magnesio
+        (4000, 5000),  # Estiércol de Vacuno (Fixed base to 4000, can step up to 5000)
+        (0, 1000),     # Urea
+        (0, 1000),     # Fosfato Diamónico
+        (0, 1000),     # Cloruro de Potasio
+        (0, 1000),     # Sulfato de Potasio y Magnesio
     ]
 
     result = minimize(
