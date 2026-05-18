@@ -19,17 +19,15 @@ ESTIERCOL_MIN = 4000.0
 ESTIERCOL_MAX = 6000.0
 
 OTHER_FERTILIZER_MIN = 0.0
-OTHER_FERTILIZER_MAX = 2000.0
+OTHER_FERTILIZER_MAX = 3000.0
 
 
 # ------------------------------------------------------------
-# Soft excess reference
+# This is only for reporting.
+# It is NOT a hard upper constraint.
+# The hard rule is only:
 #
-# This is NOT a hard upper limit.
-# It is only used for printing the status.
-#
-# The optimizer will allow more than this if needed,
-# but it will try to minimize unnecessary excess.
+#     supplied_i >= required_i
 # ------------------------------------------------------------
 EXCESS_TOLERANCE = 50.0
 
@@ -37,35 +35,25 @@ EXCESS_TOLERANCE = 50.0
 # ------------------------------------------------------------
 # Fertilizer preference weights
 #
-# Order:
-# 0 = Estiércol de Vacuno
-# 1 = Urea
-# 2 = Fosfato Diamónico
-# 3 = Cloruro de Potasio
-# 4 = Sulfato de Potasio y Magnesio
+# Smaller = preferred.
 #
-# Smaller value means more preferred.
-#
-# Important:
-# Do NOT make Estiércol strongly negative.
-# If it is too negative, the optimizer may push it to the maximum
-# even when it creates too much excess.
+# Do not use a strong negative value for Estiércol.
+# A strong negative value can push Estiércol too high and create
+# unnecessary excess.
 # ------------------------------------------------------------
 FERTILIZER_WEIGHTS = np.array([
-    0.01,  # Estiércol de Vacuno, preferred
+    0.01,  # Estiércol de Vacuno
     1.00,  # Urea
     1.00,  # Fosfato Diamónico
     3.00,  # Cloruro de Potasio
     3.00,  # Sulfato de Potasio y Magnesio
-])
+], dtype=float)
 
 
 # ------------------------------------------------------------
 # Excess penalty weights
 #
 # These penalize nutrients supplied above the requirement.
-#
-# Larger value = stronger penalty against excess.
 # ------------------------------------------------------------
 EXCESS_WEIGHTS = np.array([
     10.0,  # N
@@ -74,7 +62,7 @@ EXCESS_WEIGHTS = np.array([
     20.0,  # CaO
     20.0,  # MgO
     20.0,  # S
-])
+], dtype=float)
 
 
 def formula_as_fraction():
@@ -84,33 +72,32 @@ def formula_as_fraction():
     Example:
         46.0 means 46%, so it becomes 0.46.
 
-    If FORMULA is already in fraction form, for example 0.46,
-    then it is kept as it is.
+    If FORMULA is already written as fraction, for example 0.46,
+    it is kept unchanged.
     """
 
     formula = np.array(FORMULA, dtype=float)
 
     if formula.ndim != 2:
         raise ValueError(
-            f"FORMULA must be a 2D matrix, but got shape {formula.shape}"
+            f"FORMULA must be a 2D matrix. Current shape: {formula.shape}"
         )
 
     if formula.shape[0] != len(FERTILIZER_NAMES):
         raise ValueError(
-            "FORMULA row number must match number of fertilizers.\n"
+            "FORMULA rows must match FERTILIZER_NAMES.\n"
             f"FORMULA shape: {formula.shape}\n"
-            f"FERTILIZER_NAMES length: {len(FERTILIZER_NAMES)}"
+            f"Number of fertilizers: {len(FERTILIZER_NAMES)}"
         )
 
     if formula.shape[1] != len(NUTRIENTS):
         raise ValueError(
-            "FORMULA column number must match number of nutrients.\n"
+            "FORMULA columns must match NUTRIENTS.\n"
             f"FORMULA shape: {formula.shape}\n"
-            f"NUTRIENTS length: {len(NUTRIENTS)}\n"
-            "Expected columns: [N, P2O5, K2O, CaO, MgO, S]"
+            f"Number of nutrients: {len(NUTRIENTS)}\n"
+            "Expected nutrient order: [N, P2O5, K2O, CaO, MgO, S]"
         )
 
-    # If values are written as percentages, convert to fractions.
     if np.nanmax(formula) > 1.0:
         formula = formula / 100.0
 
@@ -119,7 +106,7 @@ def formula_as_fraction():
 
 def effective_requirements(requirements):
     """
-    Negative requirements are treated as zero.
+    Convert negative requirements to zero.
 
     Example:
         [299, 609, -150, -2384, -500, 41]
@@ -127,16 +114,21 @@ def effective_requirements(requirements):
     becomes:
         [299, 609, 0, 0, 0, 41]
 
-    This means:
-        optimize only what is missing.
+    Meaning:
+        optimize only nutrients that are missing.
     """
 
     requirements = np.array(requirements, dtype=float)
 
-    if requirements.shape[0] != len(NUTRIENTS):
+    if requirements.ndim != 1:
+        raise ValueError(
+            f"requirements must be a 1D vector. Current shape: {requirements.shape}"
+        )
+
+    if len(requirements) != len(NUTRIENTS):
         raise ValueError(
             "requirements length must match NUTRIENTS length.\n"
-            f"requirements length: {requirements.shape[0]}\n"
+            f"requirements length: {len(requirements)}\n"
             f"NUTRIENTS length: {len(NUTRIENTS)}"
         )
 
@@ -145,7 +137,7 @@ def effective_requirements(requirements):
 
 def nutrient_apport(doses):
     """
-    Calculate nutrients supplied by fertilizer doses.
+    Calculate nutrient supplied by fertilizer doses.
 
     doses:
         [Estiércol, Urea, Fosfato Diamónico, Cloruro K, Sulfato K-Mg]
@@ -159,6 +151,17 @@ def nutrient_apport(doses):
     """
 
     doses = np.array(doses, dtype=float)
+
+    if doses.ndim != 1:
+        raise ValueError(f"doses must be a 1D vector. Current shape: {doses.shape}")
+
+    if len(doses) != len(FERTILIZER_NAMES):
+        raise ValueError(
+            "doses length must match FERTILIZER_NAMES length.\n"
+            f"doses length: {len(doses)}\n"
+            f"FERTILIZER_NAMES length: {len(FERTILIZER_NAMES)}"
+        )
+
     formula = formula_as_fraction()
 
     return doses @ formula
@@ -172,40 +175,50 @@ def final_remaining(doses, requirements):
 
 def validate_solution(requirements, doses, tolerance=1e-6):
     """
-    Final hard validation.
+    Strict final validation.
 
-    This function guarantees that every positive nutrient requirement
-    is satisfied.
+    This guarantees:
 
-    If one nutrient is missing, the solution is rejected.
+        supplied_i >= required_i
+
+    for every positive requirement.
+
+    If not, the solution is rejected.
     """
 
     requirements = effective_requirements(requirements)
     apport = nutrient_apport(doses)
     remaining = requirements - apport
 
-    missing = remaining > tolerance
+    missing_mask = remaining > tolerance
 
-    if np.any(missing):
-        print("\nERROR: invalid fertilizer solution.")
-        print("At least one nutrient requirement is still missing.")
-        print("This solution will be rejected.")
+    print("\nSTRICT FINAL VALIDATION")
+    print("Rule: supplied_i must be >= required_i for every positive requirement.")
 
-        for name, req, app, rem in zip(
-            NUTRIENTS,
-            requirements,
-            apport,
-            remaining,
-        ):
+    for name, req, app, rem in zip(NUTRIENTS, requirements, apport, remaining):
+        print(
+            f"  {name:5s}: "
+            f"required = {req:10.2f}   "
+            f"supplied = {app:10.2f}   "
+            f"remaining = {rem:10.2f}"
+        )
+
+    if np.any(missing_mask):
+        lines = [
+            "",
+            "INVALID OPTIMIZATION RESULT.",
+            "At least one nutrient requirement is still missing.",
+            "The program stops here instead of using a wrong fertilizer recommendation.",
+            "",
+        ]
+
+        for name, req, app, rem in zip(NUTRIENTS, requirements, apport, remaining):
             if rem > tolerance:
-                print(
-                    f"  {name:5s}: "
-                    f"required = {req:10.2f}, "
-                    f"supplied = {app:10.2f}, "
-                    f"missing = {rem:10.2f}"
+                lines.append(
+                    f"{name}: required = {req:.2f}, supplied = {app:.2f}, missing = {rem:.2f}"
                 )
 
-        return False
+        raise RuntimeError("\n".join(lines))
 
     return True
 
@@ -214,7 +227,7 @@ def objective(doses, requirements):
     """
     Kept for compatibility with the bigger code.
 
-    The actual optimization is done with linprog in optimize_fertilizers().
+    The real optimizer is linprog inside optimize_fertilizers().
     """
 
     requirements = effective_requirements(requirements)
@@ -223,18 +236,13 @@ def objective(doses, requirements):
     apport = nutrient_apport(doses)
 
     remaining = requirements - apport
-    excess = np.maximum(apport - requirements, 0.0)
     missing = np.maximum(remaining, 0.0)
+    excess = np.maximum(apport - requirements, 0.0)
 
     error = 0.0
 
-    # Strong penalty if something is missing.
     error += 10000.0 * np.sum(missing ** 2)
-
-    # Soft penalty for excess.
     error += np.sum(EXCESS_WEIGHTS * excess)
-
-    # Fertilizer preference.
     error += np.sum(FERTILIZER_WEIGHTS * doses)
 
     return error
@@ -244,7 +252,7 @@ def make_constraints(requirements):
     """
     Kept for compatibility with the bigger code.
 
-    linprog builds constraints directly inside solve_linear_program().
+    linprog constraints are built directly inside solve_linear_program().
     """
 
     return []
@@ -269,16 +277,13 @@ def solve_linear_program(requirements):
         x[9]  = excess MgO
         x[10] = excess S
 
-    Main hard rule:
+    Hard rule:
 
         supplied_i >= required_i
 
-    This is applied to every nutrient where requirement_i > 0.
-
     Soft rule:
 
-        excess_i is minimized in the objective,
-        but it is not forbidden.
+        excess_i is minimized, but not forbidden.
     """
 
     requirements = effective_requirements(requirements)
@@ -286,70 +291,58 @@ def solve_linear_program(requirements):
 
     n_fertilizers = len(FERTILIZER_NAMES)
     n_nutrients = len(NUTRIENTS)
-
     n_variables = n_fertilizers + n_nutrients
 
-    # ------------------------------------------------------------
-    # Objective vector
-    #
-    # Minimize:
-    #
-    #   fertilizer cost/preference
-    #   + excess nutrient penalties
-    # ------------------------------------------------------------
-    c = np.zeros(n_variables)
+    c = np.zeros(n_variables, dtype=float)
 
+    # Fertilizer preference cost
     c[:n_fertilizers] = FERTILIZER_WEIGHTS
+
+    # Excess nutrient penalty
     c[n_fertilizers:] = EXCESS_WEIGHTS
 
     A_ub = []
     b_ub = []
 
+    print("\nDEBUG: FORMULA information")
+    print(f"  FORMULA shape: {np.array(FORMULA).shape}")
+    print(f"  NUTRIENTS: {list(NUTRIENTS)}")
+    print(f"  FERTILIZER_NAMES: {list(FERTILIZER_NAMES)}")
+    print("  FORMULA as fraction:")
+    print(formula)
+
     print("\nDEBUG: hard nutrient constraints")
 
     for i, req in enumerate(requirements):
-
         nutrient_vector = formula[:, i]
 
-        # --------------------------------------------------------
-        # Hard lower constraint for required nutrients:
-        #
-        #   supplied_i >= required_i
-        #
-        # linprog only accepts:
-        #
-        #   A_ub @ x <= b_ub
-        #
-        # Therefore:
-        #
-        #   -supplied_i <= -required_i
-        #
-        # This is the critical part that guarantees:
-        #
-        #   required_i <= supplied_i
-        # --------------------------------------------------------
         if req > 0:
-            row = np.zeros(n_variables)
+            # supplied_i >= required_i
+            #
+            # linprog uses:
+            #     A_ub @ x <= b_ub
+            #
+            # Therefore:
+            #     -supplied_i <= -required_i
+
+            row = np.zeros(n_variables, dtype=float)
             row[:n_fertilizers] = -nutrient_vector
 
             A_ub.append(row)
             b_ub.append(-req)
 
             print(f"  {NUTRIENTS[i]} must be >= {req:.2f}")
-            print(f"    formula column = {nutrient_vector}")
+            print(f"    coefficients = {nutrient_vector}")
 
-        # --------------------------------------------------------
-        # Excess variable definition:
+        # Excess variable:
         #
-        #   excess_i >= supplied_i - required_i
+        # excess_i >= supplied_i - required_i
         #
-        # Equivalent:
+        # equivalent:
         #
-        #   supplied_i - excess_i <= required_i
-        #
-        # This lets linprog minimize excess in the objective.
-        # --------------------------------------------------------
-        row = np.zeros(n_variables)
+        # supplied_i - excess_i <= required_i
+
+        row = np.zeros(n_variables, dtype=float)
         row[:n_fertilizers] = nutrient_vector
         row[n_fertilizers + i] = -1.0
 
@@ -359,21 +352,16 @@ def solve_linear_program(requirements):
     A_ub = np.array(A_ub, dtype=float)
     b_ub = np.array(b_ub, dtype=float)
 
-    # ------------------------------------------------------------
-    # Bounds
-    # ------------------------------------------------------------
     bounds = []
 
-    # Fertilizers
-    bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))                  # Estiércol
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))    # Urea
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))    # Fosfato Diamónico
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))    # Cloruro de Potasio
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))    # Sulfato K-Mg
+    bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))                # Estiércol
+    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Urea
+    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Fosfato Diamónico
+    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Cloruro de Potasio
+    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Sulfato K-Mg
 
-    # Excess variables
     for _ in range(n_nutrients):
-        bounds.append((0.0, None))
+        bounds.append((0.0, None))  # excess variables
 
     result = linprog(
         c=c,
@@ -389,7 +377,7 @@ def solve_linear_program(requirements):
         doses = full_x[:n_fertilizers]
         excess_variables = full_x[n_fertilizers:]
 
-        # Keep compatibility with your bigger code:
+        # Keep compatibility:
         # result.x contains only the 5 fertilizer doses.
         result.full_x = full_x
         result.x = doses
@@ -402,14 +390,9 @@ def optimize_fertilizers(requirements):
     """
     Optimize fertilizer doses using linear programming.
 
-    This version forces:
+    This version guarantees that every positive requirement is covered.
 
-        supplied_i >= required_i
-
-    for every positive nutrient requirement.
-
-    It does NOT force an upper tolerance as a hard constraint.
-    Excess is minimized softly.
+    If the optimizer gives an invalid result, it raises RuntimeError.
     """
 
     requirements = effective_requirements(requirements)
@@ -417,35 +400,21 @@ def optimize_fertilizers(requirements):
     result = solve_linear_program(requirements)
 
     if not result.success:
-        print("\nWARNING: Linear optimization failed.")
-        print(result.message)
-        print("\nPossible reasons:")
-        print("  1. Requirements are too high for the fertilizer limits.")
-        print("  2. OTHER_FERTILIZER_MAX is too low.")
-        print("  3. FORMULA matrix columns are not ordered as [N, P2O5, K2O, CaO, MgO, S].")
-        print("  4. FORMULA matrix is missing one nutrient column.")
-        print("\nThings to try:")
-        print("  - Increase OTHER_FERTILIZER_MAX from 2000 to 3000 or 5000.")
-        print("  - Check that FORMULA has shape (5, 6).")
-        print("  - Check P2O5 column carefully.")
-        return result
-
-    # ------------------------------------------------------------
-    # Final validation.
-    #
-    # This prevents accepting a solution like:
-    #
-    #   P2O5 required = 609
-    #   P2O5 supplied = 522
-    #
-    # That must be rejected.
-    # ------------------------------------------------------------
-    if not validate_solution(requirements, result.x):
-        result.success = False
-        result.message = (
-            "Invalid solution: at least one positive nutrient requirement "
-            "is still missing."
+        raise RuntimeError(
+            "\nLinear optimization failed.\n"
+            f"{result.message}\n\n"
+            "Possible reasons:\n"
+            "  1. Requirements are too high for the fertilizer limits.\n"
+            "  2. OTHER_FERTILIZER_MAX is too low.\n"
+            "  3. FORMULA columns are not ordered as [N, P2O5, K2O, CaO, MgO, S].\n"
+            "  4. FORMULA matrix is missing one nutrient column.\n\n"
+            "Things to try:\n"
+            "  - Increase OTHER_FERTILIZER_MAX.\n"
+            "  - Check FORMULA shape. It must be (5, 6).\n"
+            "  - Check that P2O5 is the second column in FORMULA.\n"
         )
+
+    validate_solution(requirements, result.x)
 
     return result
 
@@ -486,6 +455,8 @@ def print_optimization_results(requirements, result):
     apport = nutrient_apport(doses)
     remaining = final_remaining(doses, requirements)
     excess = apport - requirements
+
+    validate_solution(requirements, doses)
 
     print("\nOriginal requirements:")
     print("Negative requirements are treated as zero.")
@@ -535,7 +506,6 @@ def print_optimization_results(requirements, result):
         remaining,
         excess,
     ):
-
         if req > 0:
             if rem > 1e-6:
                 status = "MISSING"
