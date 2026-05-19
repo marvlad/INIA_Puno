@@ -1,3 +1,4 @@
+# pip install msoffcrypto-tool openpyxl
 import msoffcrypto
 from openpyxl import load_workbook
 from io import BytesIO
