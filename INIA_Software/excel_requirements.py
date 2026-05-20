@@ -28,7 +28,7 @@ def get_requirements_with_excel(excel_file, output_csv):
         app.calculate()
 
         ws = wb.sheets["Nec_fert"]
-        values = ws.range("J37:J42").value
+        values = ws.range("K37:K42").value
 
         wb.save()
         wb.close()
