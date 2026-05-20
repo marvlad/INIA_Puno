@@ -3,12 +3,11 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
+from itertools import combinations
 
 from config import (
     NUTRIENTS,
-    FERTILIZER_NAMES,
     CURRENT_DOSES,
-    FORMULA,
 )
 
 
@@ -23,80 +22,269 @@ OTHER_FERTILIZER_MAX = 3000.0
 
 
 # ------------------------------------------------------------
-# This is only for reporting.
-# It is NOT a hard upper constraint.
-# The hard rule is only:
-#
-#     supplied_i >= required_i
+# Maximum number of fertilizers selected by optimizer
 # ------------------------------------------------------------
-EXCESS_TOLERANCE = 50.0
+MAX_FERTILIZERS_USED = 5
 
 
 # ------------------------------------------------------------
-# Fertilizer preference weights
+# Nutrients optimized
 #
-# Smaller = preferred.
+# Priority requested:
+#   1. P2O5
+#   2. K2O
+#   3. N
+#   4. CaO
+#   5. MgO
 #
-# Do not use a strong negative value for Estiércol.
-# A strong negative value can push Estiércol too high and create
-# unnecessary excess.
+# S is ignored because it is not measured.
 # ------------------------------------------------------------
-FERTILIZER_WEIGHTS = np.array([
-    0.01,  # Estiércol de Vacuno
-    1.00,  # Urea
-    1.00,  # Fosfato Diamónico
-    3.00,  # Cloruro de Potasio
-    3.00,  # Sulfato de Potasio y Magnesio
-], dtype=float)
+OPTIMIZED_NUTRIENTS = ["P2O5", "K2O", "N", "CaO", "MgO"]
 
 
 # ------------------------------------------------------------
 # Excess penalty weights
 #
-# These penalize nutrients supplied above the requirement.
+# Larger value = optimizer tries harder to avoid excess.
+#
+# This creates the priority:
+#   P2O5 first, then K2O, then N, then CaO and MgO.
 # ------------------------------------------------------------
-EXCESS_WEIGHTS = np.array([
-    10.0,  # N
-    10.0,  # P2O5
-    20.0,  # K2O
-    20.0,  # CaO
-    20.0,  # MgO
-    20.0,  # S
-], dtype=float)
+EXCESS_WEIGHT_BY_NUTRIENT = {
+    "P2O5": 1_000_000.0,
+    "K2O": 100_000.0,
+    "N": 10_000.0,
+    "CaO": 1_000.0,
+    "MgO": 1_000.0,
+}
 
 
-def formula_as_fraction():
+# ------------------------------------------------------------
+# Molimax has low priority.
+# It can be used, but only if needed.
+# ------------------------------------------------------------
+LOW_PRIORITY_FERTILIZERS = [
+    "Molimax 20-20-20",
+    "Molimax 16-16-16",
+]
+
+LOW_PRIORITY_PENALTY = 5000.0
+
+
+# ------------------------------------------------------------
+# This is only for reporting.
+# It is NOT a hard upper constraint.
+# ------------------------------------------------------------
+EXCESS_TOLERANCE = 50.0
+
+
+# ------------------------------------------------------------
+# Full fertilizer table from your image.
+#
+# Nutrient values are percentages.
+#
+# pH columns:
+#   acid     -> pH < 5.5
+#   alkaline -> pH > 8.0
+#   neutral  -> 5.5 <= pH <= 8.0
+# ------------------------------------------------------------
+FERTILIZER_TABLE = {
+    "Estiércol de Vacuno": {
+        "N": 21.73,
+        "P2O5": 0.62,
+        "K2O": 0.80,
+        "CaO": 0.34,
+        "MgO": 1.00,
+        "S": 0.40,
+        "acid": True,
+        "alkaline": True,
+        "neutral": True,
+    },
+    "Urea": {
+        "N": 46.00,
+        "P2O5": 0.00,
+        "K2O": 0.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 0.00,
+        "acid": False,
+        "alkaline": True,
+        "neutral": True,
+    },
+    "Nitrato de Amonio": {
+        "N": 33.00,
+        "P2O5": 0.00,
+        "K2O": 0.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 0.00,
+        "acid": True,
+        "alkaline": False,
+        "neutral": True,
+    },
+    "Fosfato Diamónico": {
+        "N": 18.00,
+        "P2O5": 46.00,
+        "K2O": 0.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 0.00,
+        "acid": True,
+        "alkaline": True,
+        "neutral": True,
+    },
+    "Cloruro de Potasio": {
+        "N": 0.00,
+        "P2O5": 0.00,
+        "K2O": 60.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 0.00,
+        "acid": True,
+        "alkaline": False,
+        "neutral": True,
+    },
+    "Sulfato de Potasio": {
+        "N": 0.00,
+        "P2O5": 0.00,
+        "K2O": 50.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 18.00,
+        "acid": False,
+        "alkaline": True,
+        "neutral": True,
+    },
+    "Sulfato de Potasio y Magnesio": {
+        "N": 0.00,
+        "P2O5": 0.00,
+        "K2O": 22.00,
+        "CaO": 0.00,
+        "MgO": 18.00,
+        "S": 22.00,
+        "acid": False,
+        "alkaline": True,
+        "neutral": True,
+    },
+    "Molimax 20-20-20": {
+        "N": 20.00,
+        "P2O5": 20.00,
+        "K2O": 20.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 0.00,
+        "acid": True,
+        "alkaline": True,
+        "neutral": True,
+    },
+    "Molimax 16-16-16": {
+        "N": 16.00,
+        "P2O5": 16.00,
+        "K2O": 16.00,
+        "CaO": 0.00,
+        "MgO": 0.00,
+        "S": 0.00,
+        "acid": True,
+        "alkaline": True,
+        "neutral": True,
+    },
+}
+
+
+FERTILIZER_NAMES = list(FERTILIZER_TABLE.keys())
+
+
+def get_ph_class(ph):
     """
-    Convert FORMULA to fraction if it is written as percentage.
+    Classify soil pH.
+
+    Returns:
+        acid      if pH < 5.5
+        alkaline  if pH > 8.0
+        neutral   if 5.5 <= pH <= 8.0
+    """
+
+    if ph is None:
+        raise ValueError(
+            "ph is required because fertilizer use depends on soil pH."
+        )
+
+    try:
+        ph = float(ph)
+    except Exception:
+        raise ValueError(f"Invalid pH value: {ph}")
+
+    if ph < 5.5:
+        return "acid"
+
+    if ph > 8.0:
+        return "alkaline"
+
+    return "neutral"
+
+
+def fertilizer_allowed_for_ph(fertilizer_name, ph):
+    """
+    Return True if fertilizer can be used for the given pH.
+    """
+
+    ph_class = get_ph_class(ph)
+
+    if fertilizer_name not in FERTILIZER_TABLE:
+        raise ValueError(f"Unknown fertilizer: {fertilizer_name}")
+
+    return bool(FERTILIZER_TABLE[fertilizer_name][ph_class])
+
+
+def get_allowed_fertilizers(ph):
+    """
+    Return fertilizers allowed by pH.
+    """
+
+    return [
+        fertilizer_name
+        for fertilizer_name in FERTILIZER_NAMES
+        if fertilizer_allowed_for_ph(fertilizer_name, ph)
+    ]
+
+
+def build_formula_from_table(selected_fertilizers):
+    """
+    Build fertilizer formula matrix from FERTILIZER_TABLE.
+
+    Rows:
+        selected fertilizers
+
+    Columns:
+        NUTRIENTS
+
+    Values:
+        fractions, not percentages.
 
     Example:
-        46.0 means 46%, so it becomes 0.46.
-
-    If FORMULA is already written as fraction, for example 0.46,
-    it is kept unchanged.
+        46.00 becomes 0.46
     """
 
-    formula = np.array(FORMULA, dtype=float)
+    formula = []
 
-    if formula.ndim != 2:
-        raise ValueError(
-            f"FORMULA must be a 2D matrix. Current shape: {formula.shape}"
-        )
+    for fertilizer_name in selected_fertilizers:
+        if fertilizer_name not in FERTILIZER_TABLE:
+            raise ValueError(f"Unknown fertilizer: {fertilizer_name}")
 
-    if formula.shape[0] != len(FERTILIZER_NAMES):
-        raise ValueError(
-            "FORMULA rows must match FERTILIZER_NAMES.\n"
-            f"FORMULA shape: {formula.shape}\n"
-            f"Number of fertilizers: {len(FERTILIZER_NAMES)}"
-        )
+        row = []
 
-    if formula.shape[1] != len(NUTRIENTS):
-        raise ValueError(
-            "FORMULA columns must match NUTRIENTS.\n"
-            f"FORMULA shape: {formula.shape}\n"
-            f"Number of nutrients: {len(NUTRIENTS)}\n"
-            "Expected nutrient order: [N, P2O5, K2O, CaO, MgO, S]"
-        )
+        for nutrient in NUTRIENTS:
+            if nutrient not in FERTILIZER_TABLE[fertilizer_name]:
+                raise ValueError(
+                    f"Nutrient '{nutrient}' not found for fertilizer "
+                    f"'{fertilizer_name}' in FERTILIZER_TABLE."
+                )
+
+            row.append(FERTILIZER_TABLE[fertilizer_name][nutrient])
+
+        formula.append(row)
+
+    formula = np.array(formula, dtype=float)
 
     if np.nanmax(formula) > 1.0:
         formula = formula / 100.0
@@ -113,9 +301,6 @@ def effective_requirements(requirements):
 
     becomes:
         [299, 609, 0, 0, 0, 41]
-
-    Meaning:
-        optimize only nutrients that are missing.
     """
 
     requirements = np.array(requirements, dtype=float)
@@ -135,186 +320,144 @@ def effective_requirements(requirements):
     return np.maximum(requirements, 0.0)
 
 
-def nutrient_apport(doses):
+def get_optimized_nutrient_indices():
     """
-    Calculate nutrient supplied by fertilizer doses.
+    Convert OPTIMIZED_NUTRIENTS to indices in NUTRIENTS.
+    """
 
-    doses:
-        [Estiércol, Urea, Fosfato Diamónico, Cloruro K, Sulfato K-Mg]
+    indices = []
 
-    FORMULA:
-        rows = fertilizers
-        columns = nutrients [N, P2O5, K2O, CaO, MgO, S]
+    for nutrient in OPTIMIZED_NUTRIENTS:
+        if nutrient not in NUTRIENTS:
+            raise ValueError(
+                f"'{nutrient}' is not found in NUTRIENTS.\n"
+                f"NUTRIENTS = {list(NUTRIENTS)}"
+            )
 
-    output:
-        [N, P2O5, K2O, CaO, MgO, S]
+        indices.append(list(NUTRIENTS).index(nutrient))
+
+    return indices
+
+
+def generate_allowed_fertilizer_combinations(ph):
+    """
+    Generate all possible fertilizer combinations up to MAX_FERTILIZERS_USED.
+
+    Fertilizers not allowed by pH are removed before making combinations.
+    """
+
+    allowed_fertilizers = get_allowed_fertilizers(ph)
+
+    all_combinations = []
+
+    max_size = min(MAX_FERTILIZERS_USED, len(allowed_fertilizers))
+
+    for size in range(1, max_size + 1):
+        for combo in combinations(allowed_fertilizers, size):
+            all_combinations.append(list(combo))
+
+    return all_combinations
+
+
+def make_bounds_for_combo(selected_fertilizers, ph):
+    """
+    Create fertilizer bounds for one selected combination.
+    """
+
+    bounds = []
+
+    for fertilizer_name in selected_fertilizers:
+        if not fertilizer_allowed_for_ph(fertilizer_name, ph):
+            bounds.append((0.0, 0.0))
+
+        elif fertilizer_name == "Estiércol de Vacuno":
+            bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))
+
+        else:
+            bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))
+
+    return bounds
+
+
+def nutrient_apport(doses, selected_fertilizers):
+    """
+    Calculate nutrient supplied by selected fertilizer doses.
     """
 
     doses = np.array(doses, dtype=float)
 
     if doses.ndim != 1:
-        raise ValueError(f"doses must be a 1D vector. Current shape: {doses.shape}")
+        raise ValueError(f"doses must be 1D. Current shape: {doses.shape}")
 
-    if len(doses) != len(FERTILIZER_NAMES):
+    if len(doses) != len(selected_fertilizers):
         raise ValueError(
-            "doses length must match FERTILIZER_NAMES length.\n"
+            "doses length must match selected_fertilizers length.\n"
             f"doses length: {len(doses)}\n"
-            f"FERTILIZER_NAMES length: {len(FERTILIZER_NAMES)}"
+            f"selected_fertilizers length: {len(selected_fertilizers)}"
         )
 
-    formula = formula_as_fraction()
+    formula = build_formula_from_table(selected_fertilizers)
 
     return doses @ formula
 
 
-def final_remaining(doses, requirements):
-    requirements = effective_requirements(requirements)
-
-    return requirements - nutrient_apport(doses)
-
-
-def validate_solution(requirements, doses, tolerance=1e-6):
+def final_remaining(doses, requirements, selected_fertilizers):
     """
-    Strict final validation.
-
-    This guarantees:
-
-        supplied_i >= required_i
-
-    for every positive requirement.
-
-    If not, the solution is rejected.
+    Calculate remaining nutrient requirement.
     """
 
     requirements = effective_requirements(requirements)
-    apport = nutrient_apport(doses)
-    remaining = requirements - apport
+    apport = nutrient_apport(doses, selected_fertilizers)
 
-    missing_mask = remaining > tolerance
-
-    print("\nSTRICT FINAL VALIDATION")
-    print("Rule: supplied_i must be >= required_i for every positive requirement.")
-
-    for name, req, app, rem in zip(NUTRIENTS, requirements, apport, remaining):
-        print(
-            f"  {name:5s}: "
-            f"required = {req:10.2f}   "
-            f"supplied = {app:10.2f}   "
-            f"remaining = {rem:10.2f}"
-        )
-
-    if np.any(missing_mask):
-        lines = [
-            "",
-            "INVALID OPTIMIZATION RESULT.",
-            "At least one nutrient requirement is still missing.",
-            "The program stops here instead of using a wrong fertilizer recommendation.",
-            "",
-        ]
-
-        for name, req, app, rem in zip(NUTRIENTS, requirements, apport, remaining):
-            if rem > tolerance:
-                lines.append(
-                    f"{name}: required = {req:.2f}, supplied = {app:.2f}, missing = {rem:.2f}"
-                )
-
-        raise RuntimeError("\n".join(lines))
-
-    return True
+    return requirements - apport
 
 
-def objective(doses, requirements):
+def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
     """
-    Kept for compatibility with the bigger code.
+    Solve the optimizer for one fertilizer combination.
 
-    The real optimizer is linprog inside optimize_fertilizers().
+    Hard constraints:
+        P2O5 supplied >= P2O5 required
+        K2O supplied >= K2O required
+        N supplied >= N required
+        CaO supplied >= CaO required
+        MgO supplied >= MgO required
+
+    S is ignored.
     """
 
     requirements = effective_requirements(requirements)
+    formula = build_formula_from_table(selected_fertilizers)
 
-    doses = np.array(doses, dtype=float)
-    apport = nutrient_apport(doses)
+    optimized_indices = get_optimized_nutrient_indices()
 
-    remaining = requirements - apport
-    missing = np.maximum(remaining, 0.0)
-    excess = np.maximum(apport - requirements, 0.0)
-
-    error = 0.0
-
-    error += 10000.0 * np.sum(missing ** 2)
-    error += np.sum(EXCESS_WEIGHTS * excess)
-    error += np.sum(FERTILIZER_WEIGHTS * doses)
-
-    return error
-
-
-def make_constraints(requirements):
-    """
-    Kept for compatibility with the bigger code.
-
-    linprog constraints are built directly inside solve_linear_program().
-    """
-
-    return []
-
-
-def solve_linear_program(requirements):
-    """
-    Linear programming optimizer.
-
-    Variables:
-
-        x[0] = Estiércol de Vacuno
-        x[1] = Urea
-        x[2] = Fosfato Diamónico
-        x[3] = Cloruro de Potasio
-        x[4] = Sulfato de Potasio y Magnesio
-
-        x[5]  = excess N
-        x[6]  = excess P2O5
-        x[7]  = excess K2O
-        x[8]  = excess CaO
-        x[9]  = excess MgO
-        x[10] = excess S
-
-    Hard rule:
-
-        supplied_i >= required_i
-
-    Soft rule:
-
-        excess_i is minimized, but not forbidden.
-    """
-
-    requirements = effective_requirements(requirements)
-    formula = formula_as_fraction()
-
-    n_fertilizers = len(FERTILIZER_NAMES)
-    n_nutrients = len(NUTRIENTS)
-    n_variables = n_fertilizers + n_nutrients
+    n_fertilizers = len(selected_fertilizers)
+    n_optimized_nutrients = len(optimized_indices)
+    n_variables = n_fertilizers + n_optimized_nutrients
 
     c = np.zeros(n_variables, dtype=float)
 
-    # Fertilizer preference cost
-    c[:n_fertilizers] = FERTILIZER_WEIGHTS
+    # Fertilizer dose costs
+    for i, fertilizer_name in enumerate(selected_fertilizers):
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
+            c[i] = LOW_PRIORITY_PENALTY
+        elif fertilizer_name == "Estiércol de Vacuno":
+            c[i] = 0.01
+        else:
+            c[i] = 1.0
 
-    # Excess nutrient penalty
-    c[n_fertilizers:] = EXCESS_WEIGHTS
+    # Excess nutrient penalties
+    for local_j, nutrient_index in enumerate(optimized_indices):
+        nutrient_name = NUTRIENTS[nutrient_index]
+        c[n_fertilizers + local_j] = EXCESS_WEIGHT_BY_NUTRIENT[nutrient_name]
 
     A_ub = []
     b_ub = []
 
-    print("\nDEBUG: FORMULA information")
-    print(f"  FORMULA shape: {np.array(FORMULA).shape}")
-    print(f"  NUTRIENTS: {list(NUTRIENTS)}")
-    print(f"  FERTILIZER_NAMES: {list(FERTILIZER_NAMES)}")
-    print("  FORMULA as fraction:")
-    print(formula)
-
-    print("\nDEBUG: hard nutrient constraints")
-
-    for i, req in enumerate(requirements):
-        nutrient_vector = formula[:, i]
+    for local_j, nutrient_index in enumerate(optimized_indices):
+        nutrient_name = NUTRIENTS[nutrient_index]
+        req = requirements[nutrient_index]
+        nutrient_vector = formula[:, nutrient_index]
 
         if req > 0:
             # supplied_i >= required_i
@@ -331,20 +474,16 @@ def solve_linear_program(requirements):
             A_ub.append(row)
             b_ub.append(-req)
 
-            print(f"  {NUTRIENTS[i]} must be >= {req:.2f}")
-            print(f"    coefficients = {nutrient_vector}")
-
         # Excess variable:
         #
         # excess_i >= supplied_i - required_i
         #
         # equivalent:
-        #
-        # supplied_i - excess_i <= required_i
+        #     supplied_i - excess_i <= required_i
 
         row = np.zeros(n_variables, dtype=float)
         row[:n_fertilizers] = nutrient_vector
-        row[n_fertilizers + i] = -1.0
+        row[n_fertilizers + local_j] = -1.0
 
         A_ub.append(row)
         b_ub.append(req)
@@ -352,16 +491,10 @@ def solve_linear_program(requirements):
     A_ub = np.array(A_ub, dtype=float)
     b_ub = np.array(b_ub, dtype=float)
 
-    bounds = []
+    bounds = make_bounds_for_combo(selected_fertilizers, ph)
 
-    bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))                # Estiércol
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Urea
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Fosfato Diamónico
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Cloruro de Potasio
-    bounds.append((OTHER_FERTILIZER_MIN, OTHER_FERTILIZER_MAX))  # Sulfato K-Mg
-
-    for _ in range(n_nutrients):
-        bounds.append((0.0, None))  # excess variables
+    for _ in range(n_optimized_nutrients):
+        bounds.append((0.0, None))
 
     result = linprog(
         c=c,
@@ -374,62 +507,262 @@ def solve_linear_program(requirements):
     if result.success:
         full_x = result.x.copy()
 
-        doses = full_x[:n_fertilizers]
-        excess_variables = full_x[n_fertilizers:]
-
-        # Keep compatibility:
-        # result.x contains only the 5 fertilizer doses.
         result.full_x = full_x
-        result.x = doses
-        result.excess_variables = excess_variables
+        result.x = full_x[:n_fertilizers]
+        result.excess_variables = full_x[n_fertilizers:]
+        result.selected_fertilizers = selected_fertilizers
 
     return result
 
 
-def optimize_fertilizers(requirements):
+def score_solution(requirements, doses, selected_fertilizers):
     """
-    Optimize fertilizer doses using linear programming.
+    Score one feasible solution.
 
-    This version guarantees that every positive requirement is covered.
+    Lower score is better.
 
-    If the optimizer gives an invalid result, it raises RuntimeError.
+    Priority:
+        1. Avoid excess P2O5
+        2. Avoid excess K2O
+        3. Avoid excess N
+        4. Avoid excess CaO
+        5. Avoid excess MgO
+        6. Prefer fewer fertilizers
+        7. Penalize Molimax products
+    """
+
+    requirements = effective_requirements(requirements)
+    formula = build_formula_from_table(selected_fertilizers)
+
+    apport = doses @ formula
+    excess = np.maximum(apport - requirements, 0.0)
+
+    idx_p = list(NUTRIENTS).index("P2O5")
+    idx_k = list(NUTRIENTS).index("K2O")
+    idx_n = list(NUTRIENTS).index("N")
+    idx_ca = list(NUTRIENTS).index("CaO")
+    idx_mg = list(NUTRIENTS).index("MgO")
+
+    score = 0.0
+
+    score += 1_000_000.0 * excess[idx_p]
+    score += 100_000.0 * excess[idx_k]
+    score += 10_000.0 * excess[idx_n]
+    score += 1_000.0 * excess[idx_ca]
+    score += 1_000.0 * excess[idx_mg]
+
+    # Prefer fewer fertilizers.
+    score += 100.0 * len(selected_fertilizers)
+
+    # Prefer lower total dose.
+    score += 0.01 * np.sum(doses)
+
+    # Low priority for Molimax fertilizers.
+    for fertilizer_name in selected_fertilizers:
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
+            score += LOW_PRIORITY_PENALTY
+
+    return score
+
+
+def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6):
+    """
+    Strict final validation.
+
+    Checks:
+        P2O5, K2O, N, CaO, MgO
+
+    Ignores:
+        S
+    """
+
+    requirements = effective_requirements(requirements)
+    apport = nutrient_apport(doses, selected_fertilizers)
+    remaining = requirements - apport
+
+    optimized_indices = get_optimized_nutrient_indices()
+
+    print("\nSTRICT FINAL VALIDATION")
+    print("Rule: supplied_i must be >= required_i for P2O5, K2O, N, CaO, and MgO.")
+    print("S is ignored because it is not measured.")
+
+    for i, name in enumerate(NUTRIENTS):
+        req = requirements[i]
+        app = apport[i]
+        rem = remaining[i]
+
+        if i in optimized_indices:
+            rule = "CHECKED"
+        else:
+            rule = "IGNORED"
+
+        print(
+            f"  {name:5s}: "
+            f"required = {req:10.2f}   "
+            f"supplied = {app:10.2f}   "
+            f"remaining = {rem:10.2f}   "
+            f"{rule}"
+        )
+
+    missing_lines = []
+
+    for i in optimized_indices:
+        if remaining[i] > tolerance:
+            missing_lines.append(
+                f"{NUTRIENTS[i]}: required = {requirements[i]:.2f}, "
+                f"supplied = {apport[i]:.2f}, "
+                f"missing = {remaining[i]:.2f}"
+            )
+
+    if missing_lines:
+        raise RuntimeError(
+            "\nINVALID OPTIMIZATION RESULT.\n"
+            "At least one optimized nutrient requirement is still missing.\n\n"
+            + "\n".join(missing_lines)
+        )
+
+    return True
+
+
+def objective(doses, requirements):
+    """
+    Kept for compatibility with the bigger code.
+
+    The real optimizer is linprog inside optimize_fertilizers().
+    """
+
+    return 0.0
+
+
+def make_constraints(requirements):
+    """
+    Kept for compatibility with the bigger code.
+    """
+
+    return []
+
+
+def optimize_fertilizers(requirements, ph):
+    """
+    Find the best fertilizer combination.
+
+    Rules:
+        - Use only fertilizers allowed by pH.
+        - Use maximum 5 fertilizers.
+        - Optimize P2O5, K2O, N, CaO, and MgO.
+        - Ignore S.
+        - Molimax 20-20-20 and Molimax 16-16-16 have low priority.
     """
 
     requirements = effective_requirements(requirements)
 
-    result = solve_linear_program(requirements)
+    combinations_to_test = generate_allowed_fertilizer_combinations(ph)
 
-    if not result.success:
-        raise RuntimeError(
-            "\nLinear optimization failed.\n"
-            f"{result.message}\n\n"
-            "Possible reasons:\n"
-            "  1. Requirements are too high for the fertilizer limits.\n"
-            "  2. OTHER_FERTILIZER_MAX is too low.\n"
-            "  3. FORMULA columns are not ordered as [N, P2O5, K2O, CaO, MgO, S].\n"
-            "  4. FORMULA matrix is missing one nutrient column.\n\n"
-            "Things to try:\n"
-            "  - Increase OTHER_FERTILIZER_MAX.\n"
-            "  - Check FORMULA shape. It must be (5, 6).\n"
-            "  - Check that P2O5 is the second column in FORMULA.\n"
+    best_result = None
+    best_score = None
+    best_combo = None
+
+    print("\nSearching best fertilizer combination")
+    print(f"pH = {ph}")
+    print(f"pH class = {get_ph_class(ph)}")
+    print(f"Maximum fertilizers used = {MAX_FERTILIZERS_USED}")
+    print(f"Allowed fertilizers = {get_allowed_fertilizers(ph)}")
+    print(f"Combinations to test = {len(combinations_to_test)}")
+
+    for combo in combinations_to_test:
+        result = solve_linear_program_for_combo(
+            requirements=requirements,
+            ph=ph,
+            selected_fertilizers=combo,
         )
 
-    validate_solution(requirements, result.x)
+        if not result.success:
+            continue
 
-    return result
+        try:
+            validate_solution(
+                requirements=requirements,
+                doses=result.x,
+                selected_fertilizers=combo,
+            )
+        except RuntimeError:
+            continue
+
+        score = score_solution(
+            requirements=requirements,
+            doses=result.x,
+            selected_fertilizers=combo,
+        )
+
+        if best_score is None or score < best_score:
+            best_score = score
+            best_result = result
+            best_combo = combo
+
+    if best_result is None:
+        raise RuntimeError(
+            "\nNo feasible fertilizer combination was found.\n\n"
+            "Possible reasons:\n"
+            "  1. Requirements are too high.\n"
+            "  2. pH removed too many fertilizers.\n"
+            "  3. OTHER_FERTILIZER_MAX is too low.\n"
+            "  4. ESTIERCOL_MAX is too low.\n"
+            "  5. S is ignored, but P2O5, K2O, N, CaO, and MgO must be satisfied.\n"
+        )
+
+    best_result.selected_fertilizers = best_combo
+    best_result.best_score = best_score
+
+    print("\nBest fertilizer combination found:")
+    for fertilizer_name in best_combo:
+        print(f"  - {fertilizer_name}")
+
+    validate_solution(
+        requirements=requirements,
+        doses=best_result.x,
+        selected_fertilizers=best_combo,
+    )
+
+    return best_result
+
+
+def get_full_dose_vector(result):
+    """
+    Convert selected fertilizer result to full fertilizer vector.
+
+    Fertilizers not selected by the optimizer are saved as zero.
+    """
+
+    full_doses = np.zeros(len(FERTILIZER_NAMES), dtype=float)
+
+    selected_fertilizers = result.selected_fertilizers
+    selected_doses = result.x
+
+    for fertilizer_name, dose in zip(selected_fertilizers, selected_doses):
+        idx = FERTILIZER_NAMES.index(fertilizer_name)
+        full_doses[idx] = dose
+
+    return full_doses
 
 
 def save_optimal_values_csv(output_csv, result):
+    """
+    Save all fertilizers to CSV.
+
+    Fertilizers not selected by the optimizer are saved as zero.
+    """
+
     if not result.success:
         raise RuntimeError(
             "Cannot save optimal values because optimization failed:\n"
             f"{result.message}"
         )
 
-    doses = np.round(result.x, 1)
+    full_doses = get_full_dose_vector(result)
+    full_doses = np.round(full_doses, 1)
 
     df = pd.DataFrame(
-        [doses],
+        [full_doses],
         columns=FERTILIZER_NAMES,
     )
 
@@ -437,10 +770,14 @@ def save_optimal_values_csv(output_csv, result):
 
     print(f"Saved optimal values CSV: {output_csv}")
 
-    return doses
+    return full_doses
 
 
 def print_optimization_results(requirements, result):
+    """
+    Print optimization results.
+    """
+
     original_requirements = np.array(requirements, dtype=float)
     requirements = effective_requirements(requirements)
 
@@ -451,21 +788,47 @@ def print_optimization_results(requirements, result):
         print(result.message)
         return
 
+    selected_fertilizers = result.selected_fertilizers
     doses = result.x
-    apport = nutrient_apport(doses)
-    remaining = final_remaining(doses, requirements)
+
+    apport = nutrient_apport(doses, selected_fertilizers)
+    remaining = requirements - apport
     excess = apport - requirements
 
-    validate_solution(requirements, doses)
+    optimized_indices = get_optimized_nutrient_indices()
+
+    validate_solution(
+        requirements=requirements,
+        doses=doses,
+        selected_fertilizers=selected_fertilizers,
+    )
+
+    print("\nSelected fertilizers:")
+
+    for fertilizer_name in selected_fertilizers:
+        priority = ""
+
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
+            priority = "LOW PRIORITY"
+
+        print(f"  - {fertilizer_name} {priority}")
 
     print("\nOriginal requirements:")
     print("Negative requirements are treated as zero.")
+    print("P2O5, K2O, N, CaO, and MgO are optimized.")
+    print("S is ignored because it is not measured.")
 
-    for name, original, effective in zip(
-        NUTRIENTS,
-        original_requirements,
-        requirements,
-    ):
+    for i, name in enumerate(NUTRIENTS):
+        original = original_requirements[i]
+        effective = requirements[i]
+
+        if name == "S":
+            opt_status = "IGNORED, NOT MEASURED"
+        elif i in optimized_indices:
+            opt_status = "OPTIMIZED"
+        else:
+            opt_status = "REPORTED ONLY"
+
         if original < 0:
             status = "NEGATIVE -> USED AS ZERO"
         elif original == 0:
@@ -477,48 +840,63 @@ def print_optimization_results(requirements, result):
             f"  {name:5s}: "
             f"original = {original:10.2f}   "
             f"used = {effective:10.2f}   "
-            f"{status}"
+            f"{status}   "
+            f"{opt_status}"
         )
 
     print("\nOptimized fertilizer doses:")
 
-    for name, old, new in zip(FERTILIZER_NAMES, CURRENT_DOSES, doses):
+    full_doses = get_full_dose_vector(result)
+
+    for fertilizer_name, dose in zip(FERTILIZER_NAMES, full_doses):
+        if fertilizer_name in selected_fertilizers:
+            status = "SELECTED"
+        else:
+            status = "NOT USED"
+
         print(
-            f"  {name:35s}: "
-            f"{new:10.1f} kg/ha   "
-            f"{new / 50:8.1f} sacos/ha   "
-            f"change = {new - old:10.1f}"
+            f"  {fertilizer_name:35s}: "
+            f"{dose:10.1f} kg/ha   "
+            f"{dose / 50:8.1f} sacos/ha   "
+            f"{status}"
         )
 
     print("\nNutrient balance:")
     print("Hard rule:")
-    print("  supplied_i >= required_i")
-    print("Soft rule:")
-    print("  excess is minimized, but not forbidden")
+    print("  supplied_i >= required_i for P2O5, K2O, N, CaO, and MgO")
+    print("Priority:")
+    print("  P2O5 first, then K2O, then N, then CaO and MgO")
+    print("S is ignored because it is not measured.")
     print(f"Reference tolerance for status: {EXCESS_TOLERANCE:.1f} kg/ha")
 
     all_required_covered = True
 
-    for name, req, app, rem, exc in zip(
-        NUTRIENTS,
-        requirements,
-        apport,
-        remaining,
-        excess,
-    ):
-        if req > 0:
-            if rem > 1e-6:
-                status = "MISSING"
-                all_required_covered = False
-            elif exc > EXCESS_TOLERANCE + 1e-6:
-                status = "OK, HIGH EXCESS"
+    for i, name in enumerate(NUTRIENTS):
+        req = requirements[i]
+        app = apport[i]
+        rem = remaining[i]
+        exc = excess[i]
+
+        if name == "S":
+            status = "IGNORED, NOT MEASURED"
+
+        elif i in optimized_indices:
+            if req > 0:
+                if rem > 1e-6:
+                    status = "MISSING"
+                    all_required_covered = False
+                elif exc > EXCESS_TOLERANCE + 1e-6:
+                    status = "OK, HIGH EXCESS"
+                else:
+                    status = "OK"
             else:
-                status = "OK"
+                if app > EXCESS_TOLERANCE:
+                    status = "NOT REQUIRED, ADDED"
+                else:
+                    status = "NOT REQUIRED"
+
         else:
-            if app > EXCESS_TOLERANCE:
-                status = "NOT REQUIRED, ADDED"
-            else:
-                status = "NOT REQUIRED"
+            status = "REPORTED ONLY, NOT OPTIMIZED"
 
         print(
             f"  {name:5s}: "
@@ -532,11 +910,12 @@ def print_optimization_results(requirements, result):
     print("\nFinal check:")
 
     if all_required_covered:
-        print("  OK: all positive nutrient requirements are covered.")
+        print("  OK: P2O5, K2O, N, CaO, and MgO requirements are covered.")
     else:
-        print("  WARNING: at least one positive nutrient requirement is missing.")
+        print("  WARNING: at least one optimized nutrient requirement is missing.")
 
     print("\nDebug information:")
-    print(f"  FORMULA shape: {np.array(FORMULA).shape}")
+    print(f"  pH-selected fertilizers: {selected_fertilizers}")
+    print(f"  Best score: {result.best_score}")
     print(f"  Nutrients: {list(NUTRIENTS)}")
-    print(f"  Fertilizers: {list(FERTILIZER_NAMES)}")
+    print(f"  All fertilizers: {FERTILIZER_NAMES}")
