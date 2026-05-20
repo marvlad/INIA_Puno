@@ -193,7 +193,7 @@ def main():
     recalculate_excel_with_xlwings(filled_excel)
 
     # ------------------------------------------------------------
-    # 3. Read requirements from filled Excel: Nec_fert!J37:J42
+    # 3. Read requirements from filled Excel: Nec_fert!K37:K42
     # ------------------------------------------------------------
     print("\n[3] Reading fertilizer requirements")
 
