@@ -1,4 +1,4 @@
-# mineralization.py
+# get_nitrogen_mineralization.py
 
 import unicodedata
 
@@ -101,11 +101,6 @@ def get_mineralization_percentage(texture, clima):
     ----------
     texture : str
         Soil texture.
-        Example:
-            'Arenoso'
-            'Arena franca'
-            'Franco limoso'
-            'Arcilloso'
 
     clima : str
         Climate.
@@ -135,16 +130,8 @@ def get_mineralization_percentage(texture, clima):
     return MINERALIZATION_TABLE[texture_group][clima_norm]
 
 
-# ------------------------------------------------------------
-# Example usage
-# ------------------------------------------------------------
 if __name__ == "__main__":
-
     texture_input = "Franco limoso"
-    #texture_input = "Arenoso"
-    #texture_input = "Arcilloso"
-    #clima_input = "Cálido y seco"
-    #clima_input = "Frio y seco"
     clima_input = "Frio y lluvioso"
 
     mineralization = get_mineralization_percentage(
