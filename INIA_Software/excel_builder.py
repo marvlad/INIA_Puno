@@ -10,8 +10,12 @@ from openpyxl import load_workbook
 from openpyxl.drawing.image import Image
 
 from products import ALLOWED_PRODUCTS
+from get_efficiency import get_efficiencies
+from get_nitrogen_mineralization import get_mineralization_percentage
+
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+
 
 # ============================================================
 # Config
@@ -38,6 +42,7 @@ def norm(text):
     text = text.upper()
     text = re.sub(r"\s+", " ", text)
     text = text.replace("\n", " ")
+
     return text.strip()
 
 
@@ -55,12 +60,17 @@ def parse_clima(value):
     """
     Converts clima input to Excel code:
 
-        1 or Cálido -> 1
-        2 or Medio  -> 2
-        3 or Frío   -> 3
+        1 or Cálido y lluvioso -> 1
+        2 or Frío y lluvioso   -> 2
+        3 or Frío y seco       -> 3
 
-    If missing/empty/invalid, returns None.
-    The caller decides the default.
+    The input text does NOT need to be uppercase.
+    For example:
+        Cálido y lluvioso
+        Frío y lluvioso
+        Frío y seco
+
+    are accepted.
     """
 
     if value is None:
@@ -71,16 +81,31 @@ def parse_clima(value):
     if text == "":
         return None
 
-    if text in ["1", "1.0", "CALIDO", "CÁLIDO"]:
+    if text in ["1", "1.0", "CALIDO Y LLUVIOSO"]:
         return 1
 
-    if text in ["2", "2.0", "MEDIO"]:
+    if text in ["2", "2.0", "FRIO Y LLUVIOSO"]:
         return 2
 
-    if text in ["3", "3.0", "FRIO", "FRÍO"]:
+    if text in ["3", "3.0", "FRIO Y SECO"]:
         return 3
 
     return None
+
+
+def clima_code_to_label(clima_code):
+    """
+    Converts clima code to the full climate label required by
+    get_nitrogen_mineralization.py
+    """
+
+    clima_map = {
+        1: "Cálido y lluvioso",
+        2: "Frío y lluvioso",
+        3: "Frío y seco",
+    }
+
+    return clima_map.get(clima_code)
 
 
 def find_header_row(ws, required_header="NOMBRES Y APELLIDOS", max_rows=30):
@@ -138,6 +163,21 @@ def get(row_values, headers, header_name):
     return None
 
 
+def get_first_available(row_values, headers, header_names):
+    """
+    Try several possible header names and return the first non-empty value.
+    Useful when Excel files use slightly different names.
+    """
+
+    for header_name in header_names:
+        value = get(row_values, headers, header_name)
+
+        if value not in (None, ""):
+            return value
+
+    return None
+
+
 def find_person_row(ws, headers, name, start_row):
     name_cols = headers.get(norm("NOMBRES Y APELLIDOS"))
 
@@ -163,8 +203,9 @@ def find_person_row(ws, headers, name, start_row):
 
     if possible_matches:
         print("\nPosibles coincidencias:")
+
         for row_index, value in possible_matches:
-            print(f"  Row {row_index}: {value}")
+            print(f" Row {row_index}: {value}")
 
     raise ValueError("Person not found.")
 
@@ -176,13 +217,12 @@ def copy_row_style(ws, source_row, target_row):
 
         if src.has_style:
             dst._style = copy(src._style)
-
-        dst.font = copy(src.font)
-        dst.fill = copy(src.fill)
-        dst.border = copy(src.border)
-        dst.alignment = copy(src.alignment)
-        dst.number_format = src.number_format
-        dst.protection = copy(src.protection)
+            dst.font = copy(src.font)
+            dst.fill = copy(src.fill)
+            dst.border = copy(src.border)
+            dst.alignment = copy(src.alignment)
+            dst.number_format = src.number_format
+            dst.protection = copy(src.protection)
 
 
 def set_target_value(ws, target_headers, target_header, value, target_row):
@@ -194,6 +234,7 @@ def set_target_value(ws, target_headers, target_header, value, target_row):
 
     col = cols[0]
     ws.cell(target_row, col).value = value
+
     return True
 
 
@@ -206,7 +247,7 @@ def validate_crop(cultivo):
         print("\nCultivos disponibles:")
 
         for product in ALLOWED_PRODUCTS:
-            print(f"  - {product}")
+            print(f" - {product}")
 
         raise ValueError(f'Cultivo no disponible: "{cultivo}"')
 
@@ -224,6 +265,114 @@ def find_sheet_name(wb, candidates):
             return candidate
 
     return None
+
+
+def write_efficiency_and_mineralization_to_nec_fert(
+    wb,
+    ph_value,
+    texture_value,
+    clima_value,
+):
+    """
+    Writes:
+
+        Nec_fert!G27 = N efficiency
+        Nec_fert!G28 = P efficiency
+        Nec_fert!G29 = K efficiency
+        Nec_fert!G30 = Ca efficiency
+        Nec_fert!G31 = Mg efficiency
+        Nec_fert!G32 = S efficiency
+
+        Nec_fert!D21 = nitrogen mineralization percentage
+
+    Inputs:
+        Efficiencies:
+            pH + texture
+
+        Mineralization:
+            texture + clima
+    """
+
+    sheet_name = find_sheet_name(
+        wb,
+        ["Nec_fert", "Nec Fert", "NEC_FERT"],
+    )
+
+    if sheet_name is None:
+        print("WARNING: Nec_fert sheet not found. Could not write efficiencies.")
+        return
+
+    ws = wb[sheet_name]
+
+    ph_number = to_float(ph_value)
+
+    if ph_number is None:
+        print("WARNING: Invalid pH. Could not calculate efficiencies.")
+        return
+
+    if texture_value is None or str(texture_value).strip() == "":
+        print("WARNING: Empty texture. Could not calculate efficiencies.")
+        return
+
+    # ------------------------------------------------------------
+    # 1. Efficiency values: pH + texture
+    # ------------------------------------------------------------
+    try:
+        efficiencies = get_efficiencies(
+            ph=ph_number,
+            texture=texture_value,
+            decimals=0,
+        )
+
+        efficiency_cells = {
+            "N": "G27",
+            "P": "G28",
+            "K": "G29",
+            "Ca": "G30",
+            "Mg": "G31",
+            "S": "G32",
+        }
+
+        print("\nWriting efficiencies to Nec_fert:")
+
+        for nutrient, cell in efficiency_cells.items():
+            value = efficiencies[nutrient]
+
+            # This writes 35 as 35.
+            # If your Excel formula expects 0.35, change this to value / 100.
+            ws[cell] = value
+
+            print(f" {sheet_name}!{cell} / {nutrient}: {value}")
+
+    except Exception as e:
+        print("WARNING: Could not calculate/write efficiencies.")
+        print(f" Reason: {e}")
+
+    # ------------------------------------------------------------
+    # 2. Mineralization value: texture + clima
+    # ------------------------------------------------------------
+    try:
+        if clima_value is None or str(clima_value).strip() == "":
+            print("WARNING: Empty clima. Could not calculate mineralization.")
+            return
+
+        mineralization = get_mineralization_percentage(
+            texture=texture_value,
+            clima=clima_value,
+        )
+
+        # This writes 1.15 as 1.15.
+        # If your Excel formula expects 0.0115, change this to mineralization / 100.
+        ws["D21"] = mineralization
+
+        print(
+            f"{sheet_name}!D21 / Mineralización de N: "
+            f"{mineralization} from texture={texture_value}, clima={clima_value}"
+        )
+
+    except Exception as e:
+        print("WARNING: Could not calculate/write nitrogen mineralization.")
+        print(f" Reason: {e}")
 
 
 # ============================================================
@@ -254,25 +403,21 @@ def reinsert_images(wb, image_dir):
         "Textura": [
             ("image2.png", "F1"),
         ],
-
         "Interpretación": [
             ("image3.jpeg", "A1"),
             ("image4.png", "AF1"),
             ("image5.jpeg", "R1"),
         ],
-
         "Gráfico_Int": [
             ("image3.jpeg", "A1"),
             ("image4.png", "AD1"),
             ("image5.jpeg", "T1"),
         ],
-
         "Nec_fert": [
             ("image3.jpeg", "A1"),
             ("image5.jpeg", "E1"),
             ("image4.png", "I1"),
         ],
-
         "Rec_fert": [
             ("image3.jpeg", "A1"),
             ("image5.jpeg", "D1"),
@@ -287,7 +432,6 @@ def reinsert_images(wb, image_dir):
 
     for sheet_name, images in images_by_sheet.items():
         actual_sheet_name = None
-
         candidate_names = fallback_sheet_names.get(sheet_name, [sheet_name])
 
         for candidate in candidate_names:
@@ -346,6 +490,8 @@ def build_excel_from_template(
     sets the crop,
     chooses Olsen/Bray based on pH,
     writes Clima to Interpretación!BA11,
+    writes efficiencies to Nec_fert!G27:G32,
+    writes mineralization to Nec_fert!D21,
     and saves output_excel.
     """
 
@@ -374,8 +520,12 @@ def build_excel_from_template(
     # ------------------------------------------------------------
     # 1. Read person data from RESULTADOS
     # ------------------------------------------------------------
+    input_wb = load_workbook(
+        resultados_excel,
+        data_only=True,
+        read_only=True,
+    )
 
-    input_wb = load_workbook(resultados_excel, data_only=True, read_only=True)
     input_ws = input_wb.active
 
     input_header_row_number, input_header_row_values = find_header_row(input_ws)
@@ -392,9 +542,20 @@ def build_excel_from_template(
     ph_value = get(person_row_values, input_headers, "pH")
     p_value = get(person_row_values, input_headers, "P_mg/kg)")
     clima_value = get(person_row_values, input_headers, "Clima")
+
+    texture_value = get_first_available(
+        person_row_values,
+        input_headers,
+        [
+            "Clase Textural",
+            "Textura",
+            "Clase textural",
+            "TEXTURA",
+        ],
+    )
+
     codigo = get(person_row_values, input_headers, "CODIGO")
 
-    # Added location fields
     dep = get(person_row_values, input_headers, "DEP")
     prov = get(person_row_values, input_headers, "PROV")
     dist = get(person_row_values, input_headers, "DIST")
@@ -403,33 +564,34 @@ def build_excel_from_template(
     p_number = to_float(p_value)
 
     print("\nFound person:")
-    print(f"  Name: {name}")
-    print(f"  Input Excel row: {person_row_number}")
-    print(f"  CODIGO: {codigo}")
-    print(f"  DEP: {dep}")
-    print(f"  PROV: {prov}")
-    print(f"  DIST: {dist}")
-    print(f"  CULTIVO A INSTALAR from input file: {input_cultivo}")
-    print(f"  Plan de Recomendación from user: {user_product}")
-    print(f"  pH: {ph_value}")
-    print(f"  P_mg/kg): {p_value}")
-    print(f"  Clima from DB: {clima_value}")
+    print(f" Name: {name}")
+    print(f" Input Excel row: {person_row_number}")
+    print(f" CODIGO: {codigo}")
+    print(f" DEP: {dep}")
+    print(f" PROV: {prov}")
+    print(f" DIST: {dist}")
+    print(f" CULTIVO A INSTALAR from input file: {input_cultivo}")
+    print(f" Plan de Recomendación from user: {user_product}")
+    print(f" pH: {ph_value}")
+    print(f" P_mg/kg): {p_value}")
+    print(f" Clima from DB: {clima_value}")
+    print(f" Clase Textural: {texture_value}")
 
     if ph_number is None:
-        print("  Phosphorus method: pH invalid or empty")
+        print(" Phosphorus method: pH invalid or empty")
     elif ph_number < 7.0:
-        print("  Phosphorus method: Bray because pH < 7.0")
+        print(" Phosphorus method: Bray because pH < 7.0")
     else:
-        print("  Phosphorus method: Olsen because pH >= 7.0")
+        print(" Phosphorus method: Olsen because pH >= 7.0")
 
     # ------------------------------------------------------------
     # 2. Open template
     # ------------------------------------------------------------
-
     target_wb = load_workbook(template_excel)
 
     if TARGET_SHEET not in target_wb.sheetnames:
         print("Available sheets:")
+
         for sheet in target_wb.sheetnames:
             print(repr(sheet))
 
@@ -452,21 +614,18 @@ def build_excel_from_template(
     # ------------------------------------------------------------
     # 3. Mapping: target header -> input header
     # ------------------------------------------------------------
-
     mapping = {
         "CÓDIGO": "CODIGO",
         "Código Laboratorio": "CODIGO",
         "Cotizacion Servicio": "Nº DE COTIZACION",
         "Fecha Muestreo": "FECHA DE MUESTREO",
         "Hora Muestreo": "HORA DE MUESTREO",
-
         "Codigo_Muestra_Cliente": "LOCALIDAD (COMUNIDAD, CASERÍO, ASOCIACIÓN, ETC)",
         "Cliente": "INSTITUCION U ORGANIZACION",
         "Propietario / Productor": "NOMBRES Y APELLIDOS",
         "Direccion del Cliente": "LOCALIDAD (COMUNIDAD, CASERÍO, ASOCIACIÓN, ETC)",
         "Solicitado por": "RESPONSABLE",
         "Muestreado por": "NOMBRES Y APELLIDOS",
-
         "Procedencia de la Muestra": "DIST",
 
         "Acidez Intercambiable": "Acidez (H+) cmol(+)/Kg",
@@ -483,6 +642,7 @@ def build_excel_from_template(
         "Potasio Intercambiable": "Potasio (K) (*) cmol(+)/Kg",
 
         "Carbonato de Calcio Equivalente": "CaCO3 _% Equivalente",
+
         "Materia Orgánica (AS-07 Método de Walkley y Black)": "MO_%",
         "Materia Organica (AS-07 Walkley y Black)": "MO_%",
         "Materia Orgánica por LECO": "MO_%",
@@ -492,6 +652,7 @@ def build_excel_from_template(
 
         "Fósforo Disponible (Bray y Kurtz)": "P_mg/kg)",
         "Fósforo Disponible Bray mpaes": "P_mg/kg)",
+
         "Potasio Disponible (MPAES)": "K_ppm",
         "Potasio Disponible (AA)": "K_ppm",
 
@@ -507,7 +668,6 @@ def build_excel_from_template(
     # ------------------------------------------------------------
     # 4. Write mapped values
     # ------------------------------------------------------------
-
     print("\nWriting mapped values:")
 
     for target_header, input_header in mapping.items():
@@ -515,9 +675,9 @@ def build_excel_from_template(
 
         if value is None:
             value = 0
-            print(f"  {target_header}: INPUT HEADER NOT FOUND or EMPTY -> set to 0")
+            print(f" {target_header}: INPUT HEADER NOT FOUND or EMPTY -> set to 0")
         else:
-            print(f"  {target_header}: {value}")
+            print(f" {target_header}: {value}")
 
         set_target_value(
             target_ws,
@@ -530,7 +690,6 @@ def build_excel_from_template(
     # ------------------------------------------------------------
     # 5. Fixed values
     # ------------------------------------------------------------
-
     fixed_values = {
         "Número de Muestras": 1,
         "Presentación Muestra": "1 kg",
@@ -549,7 +708,7 @@ def build_excel_from_template(
         )
 
         if ok:
-            print(f"  {target_header}: {value}")
+            print(f" {target_header}: {value}")
 
     # ------------------------------------------------------------
     # 6. Force specific cells
@@ -557,18 +716,25 @@ def build_excel_from_template(
 
     # T3 = Plan de Recomendación de Fertilización
     target_ws["T3"] = user_product
+
     print(f"\nT3 / Plan de Recomendación de Fertilización: {user_product}")
 
     # ------------------------------------------------------------
     # 6.1 Force Clima value into Interpretación!BA11
+    #
+    # Clima logic:
+    #   1 -> Cálido y lluvioso
+    #   2 -> Frío y lluvioso
+    #   3 -> Frío y seco
     # ------------------------------------------------------------
-
     clima_code = parse_clima(clima_value)
     clima_was_assumed = False
 
     if clima_code is None:
         clima_code = 2
         clima_was_assumed = True
+
+    clima_label = clima_code_to_label(clima_code)
 
     interpretation_sheet_name = find_sheet_name(
         target_wb,
@@ -583,16 +749,10 @@ def build_excel_from_template(
         if clima_was_assumed:
             print(
                 f"WARNING: Clima was not found or was empty/invalid in the DB. "
-                f"Assuming Clima = 2 (Medio). "
+                f"Assuming Clima = {clima_code} ({clima_label}). "
                 f"Written to {interpretation_sheet_name}!BA11."
             )
         else:
-            clima_label = {
-                1: "Cálido",
-                2: "Medio",
-                3: "Frío",
-            }.get(clima_code, "Unknown")
-
             print(
                 f"{interpretation_sheet_name}!BA11 / Clima: "
                 f"{clima_code} ({clima_label}) from DB value: {clima_value}"
@@ -600,19 +760,16 @@ def build_excel_from_template(
 
     # ------------------------------------------------------------
     # 6.2 Phosphorus method:
-    # AL3 = Fósforo Disponible Olsen
-    # AM3 = Fósforo Disponible Bray y Kurtz
+    #     AL3 = Fósforo Disponible Olsen
+    #     AM3 = Fósforo Disponible Bray y Kurtz
     # ------------------------------------------------------------
-
     target_ws["AL3"] = 0
     target_ws["AM3"] = 0
 
     if p_number is None:
         print("P_mg/kg) not found or invalid. AL3 and AM3 set to 0.")
-
     elif ph_number is None:
         print("pH not found or invalid. Cannot choose Olsen/Bray. AL3 and AM3 set to 0.")
-
     elif ph_number < 7.0:
         target_ws["AM3"] = p_number
 
@@ -620,7 +777,6 @@ def build_excel_from_template(
         print("Using Bray because pH < 7.0")
         print("AL3 / Fósforo Disponible Olsen: 0")
         print(f"AM3 / Fósforo Disponible Bray y Kurtz: {p_number}")
-
     else:
         target_ws["AL3"] = p_number
 
@@ -630,9 +786,29 @@ def build_excel_from_template(
         print("AM3 / Fósforo Disponible Bray y Kurtz: 0")
 
     # ------------------------------------------------------------
+    # 6.3 Write efficiencies and mineralization to Nec_fert
+    #
+    # Efficiency uses:
+    #   pH + texture
+    #
+    # Mineralization uses:
+    #   texture + full climate label
+    #
+    # clima_label will be:
+    #   Cálido y lluvioso
+    #   Frío y lluvioso
+    #   Frío y seco
+    # ------------------------------------------------------------
+    write_efficiency_and_mineralization_to_nec_fert(
+        wb=target_wb,
+        ph_value=ph_value,
+        texture_value=texture_value,
+        clima_value=clima_label,
+    )
+
+    # ------------------------------------------------------------
     # 7. Reinsert images
     # ------------------------------------------------------------
-
     reinsert_images(
         target_wb,
         image_dir=image_dir,
@@ -641,10 +817,9 @@ def build_excel_from_template(
     # ------------------------------------------------------------
     # 8. Save
     # ------------------------------------------------------------
-
     target_wb.save(output_excel)
 
     print("\nExcel created successfully:")
-    print(f"  {output_excel}")
+    print(f" {output_excel}")
 
     return output_excel
