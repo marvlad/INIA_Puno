@@ -1,4 +1,4 @@
-# nutrient_efficiency.py
+# get_efficiency.py
 
 import unicodedata
 
@@ -16,6 +16,7 @@ def normalize_text(text):
     text = str(text).strip().lower()
     text = unicodedata.normalize("NFD", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    text = " ".join(text.split())
     return text
 
 
@@ -47,14 +48,7 @@ TEXTURE_GROUPS = {
 # ------------------------------------------------------------
 # Efficiency table
 #
-# Each pH interval has:
-#   (ph_min, ph_max, efficiencies)
-#
-# efficiencies are written as:
-#   nutrient: (minimum_efficiency, maximum_efficiency)
-#
-# For pH < 5.0, I use 0.0 to 5.0
-# For pH > 8.5, I use 8.5 to 14.0
+# Values are in percent (%)
 # ------------------------------------------------------------
 EFFICIENCY_TABLE = {
     "arenoso": [
@@ -215,14 +209,6 @@ def get_texture_group(texture):
 def interpolate_value(ph, ph_min, ph_max, value_min, value_max):
     """
     Linear interpolation.
-
-    Example:
-        pH interval: 0.0 to 5.0
-        efficiency range: 15 to 25
-
-        pH = 0.0 gives 15
-        pH = 5.0 gives 25
-        pH = 2.5 gives 20
     """
 
     if ph <= ph_min:
@@ -247,7 +233,7 @@ def get_ph_interval(ph, texture_group):
         if ph_min <= ph <= ph_max:
             return ph_min, ph_max, values
 
-    # Handle small gaps in the table, for example 5.0 to 5.1
+    # Handle small gaps in the table.
     if 5.0 < ph < 5.1:
         return intervals[1]
 
@@ -270,8 +256,7 @@ def get_efficiencies(ph, texture, decimals=2):
         Soil pH.
 
     texture : str
-        Soil texture, for example:
-        'Arenoso', 'Franco limoso', 'Arcilloso', etc.
+        Soil texture.
 
     decimals : int
         Number of decimals in the output.
@@ -309,11 +294,7 @@ def get_efficiencies(ph, texture, decimals=2):
     return results
 
 
-# ------------------------------------------------------------
-# Example usage
-# ------------------------------------------------------------
 if __name__ == "__main__":
-
     ph_input = 6.7
     texture_input = "Franco"
 
