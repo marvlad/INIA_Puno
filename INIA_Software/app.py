@@ -12,6 +12,12 @@ import os
 import signal
 
 
+# ------------------------------------------------------------
+# Import crop/product list from products.py
+# ------------------------------------------------------------
+from products import ALLOWED_PRODUCTS
+
+
 app = Flask(__name__)
 
 
@@ -24,19 +30,18 @@ DEFAULT_REPORT_SCRIPT = "report_pdf.py"
 DEFAULT_REPORT_ROOT = "reports"
 DEFAULT_PDF_FOLDER = "pdfs"
 
+
+# ------------------------------------------------------------
+# Upload folder
+# ------------------------------------------------------------
 UPLOAD_DIR = Path("uploaded_inputs")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-CULTIVOS = [
-    "PAPA NATIVA",
-    "PAPA MEJORADA",
-    "QUINUA",
-    "CAÑIHUA",
-    "AVENA",
-    "CEBADA",
-    "HABA",
-    "TRIGO",
-]
+
+# ------------------------------------------------------------
+# Crop/product options from products.py
+# ------------------------------------------------------------
+CULTIVOS = ALLOWED_PRODUCTS
 
 
 # ------------------------------------------------------------
@@ -144,15 +149,21 @@ def generate():
         cultivo = request.form.get("cultivo", "").strip()
 
         if not name:
-            return jsonify({"ok": False, "error": "El nombre es obligatorio."})
+            return jsonify({
+                "ok": False,
+                "error": "El nombre es obligatorio.",
+            })
 
         if not cultivo:
-            return jsonify({"ok": False, "error": "El cultivo es obligatorio."})
+            return jsonify({
+                "ok": False,
+                "error": "El cultivo es obligatorio.",
+            })
 
         # ------------------------------------------------------------
-        # Files from index.html
+        # Uploaded files from index.html
         #
-        # These names must match:
+        # These names must match the HTML:
         #   resultados_excel_file
         #   template_excel_file
         #   report_script_file
@@ -222,11 +233,12 @@ def generate():
                 "cwd": Path(__file__).resolve().parent,
             }
 
-            # On Linux/macOS, create a new process group so /stop can kill child processes too.
+            # On Linux/macOS, create a new process group
+            # so /stop can kill child processes too.
             if os.name != "nt":
                 popen_kwargs["preexec_fn"] = os.setsid
 
-            # On Windows, allow process group termination when possible.
+            # On Windows, create a new process group when possible.
             if os.name == "nt":
                 popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
@@ -246,7 +258,10 @@ def generate():
 
         except Exception as e:
             process = None
-            return jsonify({"ok": False, "error": str(e)})
+            return jsonify({
+                "ok": False,
+                "error": str(e),
+            })
 
 
 @app.route("/stream")
@@ -303,29 +318,60 @@ def stop():
 
         try:
             if os.name == "nt":
-                # First try CTRL_BREAK_EVENT for process group.
                 try:
                     process.send_signal(signal.CTRL_BREAK_EVENT)
                 except Exception:
                     process.terminate()
             else:
-                # Kill whole process group.
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                 except Exception:
                     process.terminate()
 
             output_queue.put("[PROCESS_STOPPED]")
+
             return jsonify({"ok": True})
 
         except Exception as e:
-            return jsonify({"ok": False, "error": str(e)})
+            return jsonify({
+                "ok": False,
+                "error": str(e),
+            })
 
 
 if __name__ == "__main__":
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=False,
-        threaded=True,
-    )
+    import webbrowser
+    import time
+    import traceback
+
+    url = "http://127.0.0.1:5000"
+
+    try:
+        print("=" * 80)
+        print("Generador de Reportes INIA Puno")
+        print("=" * 80)
+        print(f"Abriendo navegador en: {url}")
+        print("No cierres esta ventana mientras usas la aplicación.")
+        print("=" * 80)
+
+        def open_browser():
+            time.sleep(1.5)
+            webbrowser.open(url)
+
+        threading.Thread(
+            target=open_browser,
+            daemon=True,
+        ).start()
+
+        app.run(
+            host="127.0.0.1",
+            port=5000,
+            debug=False,
+            threaded=True,
+            use_reloader=False,
+        )
+
+    except Exception:
+        print("\nERROR:")
+        traceback.print_exc()
+        input("\nPresiona ENTER para cerrar...")
