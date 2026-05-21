@@ -2,7 +2,6 @@
 
 from flask import Flask, render_template, request, jsonify, Response
 from pathlib import Path
-from werkzeug.utils import secure_filename
 
 import subprocess
 import threading
@@ -49,12 +48,9 @@ DEFAULT_PDF_FOLDER = "pdfs"
 
 
 # ------------------------------------------------------------
-# Upload folder
+# Base directory
 # ------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-
-UPLOAD_DIR = BASE_DIR / "uploaded_inputs"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ------------------------------------------------------------
@@ -81,33 +77,6 @@ def clear_output_queue():
             output_queue.get_nowait()
         except queue.Empty:
             break
-
-
-def save_uploaded_file(file_storage, default_path):
-    """
-    Save uploaded file if the user selected one.
-
-    If the user did not select a file, return the default path.
-    """
-
-    if file_storage is None:
-        return default_path
-
-    if file_storage.filename is None:
-        return default_path
-
-    if file_storage.filename.strip() == "":
-        return default_path
-
-    filename = secure_filename(file_storage.filename)
-
-    if filename == "":
-        return default_path
-
-    saved_path = UPLOAD_DIR / filename
-    file_storage.save(saved_path)
-
-    return str(saved_path.resolve())
 
 
 def enqueue_output(proc):
@@ -144,12 +113,51 @@ def index():
     )
 
 
+@app.route("/browse-file")
+def browse_file():
+    """
+    Open native Windows file selector and return the real file path.
+
+    This works because Flask is running locally on the same Windows machine.
+    """
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        path = filedialog.askopenfilename(
+            title="Seleccionar archivo",
+            filetypes=[
+                ("Excel files", "*.xlsx *.xlsm *.xls"),
+                ("Python files", "*.py"),
+                ("All files", "*.*"),
+            ],
+        )
+
+        root.destroy()
+
+        return jsonify({
+            "path": path,
+            "error": "",
+        })
+
+    except Exception as e:
+        return jsonify({
+            "path": "",
+            "error": str(e),
+        })
+
+
 @app.route("/browse-folder")
 def browse_folder():
     """
-    Open native Windows folder selector.
+    Open native Windows folder selector and return the real folder path.
 
-    This works when Flask is running locally on the same Windows machine.
+    This works because Flask is running locally on the same Windows machine.
     """
 
     try:
@@ -183,9 +191,8 @@ def generate():
     """
     Start report generation.
 
-    Uploaded files are optional:
-        - If uploaded, use uploaded file.
-        - If not uploaded, use default file.
+    The paths come directly from the text inputs.
+    They are filled manually or with the Windows selector.
     """
 
     global process
@@ -214,28 +221,20 @@ def generate():
                 "error": "El cultivo es obligatorio.",
             })
 
-        # ------------------------------------------------------------
-        # Uploaded files from index.html.
-        #
-        # These names must match the HTML:
-        #   resultados_excel_file
-        #   template_excel_file
-        #   report_script_file
-        # ------------------------------------------------------------
-        resultados_excel = save_uploaded_file(
-            request.files.get("resultados_excel_file"),
+        resultados_excel = request.form.get(
+            "resultados_excel",
             DEFAULT_RESULTADOS_EXCEL,
-        )
+        ).strip() or DEFAULT_RESULTADOS_EXCEL
 
-        template_excel = save_uploaded_file(
-            request.files.get("template_excel_file"),
+        template_excel = request.form.get(
+            "template_excel",
             DEFAULT_TEMPLATE_EXCEL,
-        )
+        ).strip() or DEFAULT_TEMPLATE_EXCEL
 
-        report_script = save_uploaded_file(
-            request.files.get("report_script_file"),
+        report_script = request.form.get(
+            "report_script",
             DEFAULT_REPORT_SCRIPT,
-        )
+        ).strip() or DEFAULT_REPORT_SCRIPT
 
         report_root = request.form.get(
             "report_root",
