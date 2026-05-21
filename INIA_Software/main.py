@@ -119,6 +119,7 @@ def main():
     # ------------------------------------------------------------
     # Create central report directory
     # ------------------------------------------------------------
+
     report_dir = make_report_directory(
         args.report_root,
         args.name,
@@ -137,14 +138,17 @@ def main():
     # ------------------------------------------------------------
     # Output files
     # ------------------------------------------------------------
+
     base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
 
     filled_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_FILLED.xlsx"
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
+        f"{base_name}_FILLED.xlsx"
     )
 
     optimized_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_{base_name}_OPTIMIZED.xlsx"
+        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
+        f"{base_name}_OPTIMIZED.xlsx"
     )
 
     requirements_csv = report_dir / "requirements.csv"
@@ -167,9 +171,10 @@ def main():
     # ------------------------------------------------------------
     # 1. Build filled Excel from RESULTADOS + template
     # ------------------------------------------------------------
+
     print("\n[1] Building filled Excel from RESULTADOS + template")
 
-    build_excel_from_template(
+    filled_excel_returned, ph_value = build_excel_from_template(
         resultados_excel=resultados_excel,
         template_excel=template_excel,
         name=args.name,
@@ -177,6 +182,21 @@ def main():
         output_excel=filled_excel,
         image_dir="extracted_images",
     )
+
+    if ph_value is None:
+        raise ValueError(
+            "Could not extract pH from RESULTADOS Excel. "
+            "The optimizer needs pH to select allowed fertilizers."
+        )
+
+    try:
+        ph_value = float(ph_value)
+    except Exception:
+        raise ValueError(
+            f"Invalid pH value extracted from RESULTADOS Excel: {ph_value}"
+        )
+
+    print(f"\nExtracted pH for optimizer: {ph_value}")
 
     if not filled_excel.exists():
         raise FileNotFoundError(
@@ -188,6 +208,7 @@ def main():
     # ------------------------------------------------------------
     # 2. Recalculate filled Excel before reading requirements
     # ------------------------------------------------------------
+
     print("\n[2] Recalculating filled Excel")
 
     recalculate_excel_with_xlwings(filled_excel)
@@ -195,6 +216,7 @@ def main():
     # ------------------------------------------------------------
     # 3. Read requirements from filled Excel: Nec_fert!K37:K42
     # ------------------------------------------------------------
+
     print("\n[3] Reading fertilizer requirements")
 
     requirements = get_requirements_with_excel(
@@ -205,9 +227,13 @@ def main():
     # ------------------------------------------------------------
     # 4. Optimize fertilizer values
     # ------------------------------------------------------------
+
     print("\n[4] Optimizing fertilizer doses")
 
-    result = optimize_fertilizers(requirements)
+    result = optimize_fertilizers(
+        requirements=requirements,
+        ph=ph_value,
+    )
 
     print_optimization_results(
         requirements,
@@ -220,8 +246,9 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # 5. Write optimal values to final Excel: Nec_fert!C53:C57
+    # 5. Write optimal values to final Excel
     # ------------------------------------------------------------
+
     print("\n[5] Writing optimized doses to final Excel")
 
     write_vector_to_excel(
@@ -238,14 +265,15 @@ def main():
     # ------------------------------------------------------------
     # 6. Recalculate optimized Excel
     # ------------------------------------------------------------
+
     print("\n[6] Recalculating optimized Excel")
 
     recalculate_excel_with_xlwings(optimized_excel)
 
     # ------------------------------------------------------------
     # 7. Export Excel sheets to PDF
-    # Example: Gráfico_Int + Rec_fert -> 2-page PDF
     # ------------------------------------------------------------
+
     print("\n[7] Exporting Excel sheets to PDF")
 
     export_excel_sheets_to_pdf(
@@ -262,6 +290,7 @@ def main():
     # ------------------------------------------------------------
     # 8. Generate PDF report using report_pdf.py
     # ------------------------------------------------------------
+
     print("\n[8] Generating PDF report")
 
     generated_pdf = generate_pdf_report(
@@ -274,6 +303,7 @@ def main():
     # ------------------------------------------------------------
     # 9. Copy original input files into report directory
     # ------------------------------------------------------------
+
     print("\n[9] Copying input files to report directory")
 
     # Do NOT copy RESULTADOS Excel.
@@ -281,7 +311,6 @@ def main():
     print("Skipping RESULTADOS Excel copy.")
 
     # Keep copying the template Excel, as in the original workflow.
-    # If you also do not want the template copied, set this to None.
     copied_template_excel = copy_file_to_dir(
         template_excel,
         report_dir,
@@ -289,8 +318,8 @@ def main():
 
     # ------------------------------------------------------------
     # 10. Get SU information from RESULTADOS Excel
-    # Example CODIGO: SU723-ILL-24 -> SU number 723, year 24
     # ------------------------------------------------------------
+
     if args.pdf_folder:
         print("\n[10] Getting SU information from RESULTADOS Excel")
 
@@ -318,6 +347,7 @@ def main():
     # ------------------------------------------------------------
     # Final summary
     # ------------------------------------------------------------
+
     print("\n" + "=" * 80)
     print("DONE")
     print("=" * 80)
