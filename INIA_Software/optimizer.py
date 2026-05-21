@@ -5,6 +5,7 @@ import pandas as pd
 from scipy.optimize import linprog
 from itertools import combinations
 
+
 from config import (
     NUTRIENTS,
     CURRENT_DOSES,
@@ -23,26 +24,20 @@ OTHER_FERTILIZER_MAX = 3000.0
 
 # ------------------------------------------------------------
 # Maximum number of fertilizers selected by optimizer
-#
-# Important:
-#   This includes Estiércol de Vacuno.
-#   Therefore, if MAX_FERTILIZERS_USED = 5,
-#   the optimizer can use:
-#       1 mandatory Estiércol + up to 4 additional fertilizers
 # ------------------------------------------------------------
 MAX_FERTILIZERS_USED = 5
 
 
 # ------------------------------------------------------------
-# Mandatory fertilizer
+# Estiercol is always included
 # ------------------------------------------------------------
-MANDATORY_FERTILIZER = "Estiércol de Vacuno"
+REQUIRED_FERTILIZER = "Estiércol de Vacuno"
 
 
 # ------------------------------------------------------------
 # Nutrients optimized
 #
-# Priority requested:
+# Priority order:
 #   1. P2O5
 #   2. K2O
 #   3. N
@@ -55,23 +50,6 @@ OPTIMIZED_NUTRIENTS = ["P2O5", "K2O", "N", "CaO", "MgO"]
 
 
 # ------------------------------------------------------------
-# Excess penalty weights
-#
-# Larger value = optimizer tries harder to avoid excess.
-#
-# This creates the priority:
-#   P2O5 first, then K2O, then N, then CaO and MgO.
-# ------------------------------------------------------------
-EXCESS_WEIGHT_BY_NUTRIENT = {
-    "P2O5": 1_000_000.0,
-    "K2O": 100_000.0,
-    "N": 10_000.0,
-    "CaO": 1_000.0,
-    "MgO": 1_000.0,
-}
-
-
-# ------------------------------------------------------------
 # Molimax has low priority.
 # It can be used, but only if needed.
 # ------------------------------------------------------------
@@ -80,29 +58,28 @@ LOW_PRIORITY_FERTILIZERS = [
     "Molimax 16-16-16",
 ]
 
-LOW_PRIORITY_PENALTY = 5000.0
+LOW_PRIORITY_PENALTY = 10_000.0
 
 
 # ------------------------------------------------------------
-# This is only for reporting.
-# It is NOT a hard upper constraint.
+# Reporting tolerance
 # ------------------------------------------------------------
 EXCESS_TOLERANCE = 50.0
 
 
 # ------------------------------------------------------------
-# Full fertilizer table
+# Fertilizer table from your image.
 #
 # Nutrient values are percentages.
 #
 # pH columns:
-#   acid      -> pH < 5.5
-#   alkaline  -> pH > 8.0
-#   neutral   -> 5.5 <= pH <= 8.0
+#   acid     -> pH < 5.5
+#   alkaline -> pH > 8.0
+#   neutral  -> 5.5 <= pH <= 8.0
 # ------------------------------------------------------------
 FERTILIZER_TABLE = {
     "Estiércol de Vacuno": {
-        "N": 21.73,
+        "N": 2.73,
         "P2O5": 0.62,
         "K2O": 0.80,
         "CaO": 0.34,
@@ -206,6 +183,21 @@ FERTILIZER_TABLE = {
 FERTILIZER_NAMES = list(FERTILIZER_TABLE.keys())
 
 
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+def round_up_to_1_decimal(values):
+    """
+    Round fertilizer doses UP to 1 decimal.
+
+    This avoids Excel recalculation giving a nutrient sum slightly below
+    the requirement after normal rounding.
+    """
+
+    values = np.array(values, dtype=float)
+    return np.ceil(values * 10.0 - 1e-9) / 10.0
+
+
 def get_ph_class(ph):
     """
     Classify soil pH.
@@ -217,9 +209,7 @@ def get_ph_class(ph):
     """
 
     if ph is None:
-        raise ValueError(
-            "ph is required because fertilizer use depends on soil pH."
-        )
+        raise ValueError("ph is required because fertilizer use depends on soil pH.")
 
     try:
         ph = float(ph)
@@ -353,41 +343,34 @@ def get_optimized_nutrient_indices():
 
 def generate_allowed_fertilizer_combinations(ph):
     """
-    Generate all possible fertilizer combinations.
+    Generate all possible fertilizer combinations up to MAX_FERTILIZERS_USED.
 
-    Rules:
-        - Estiércol de Vacuno is always included.
-        - Estiércol de Vacuno must be allowed by pH.
-        - Other fertilizers are selected only if allowed by pH.
-        - Maximum total fertilizers = MAX_FERTILIZERS_USED.
+    Estiércol de Vacuno is always included.
+    Fertilizers not allowed by pH are removed before making combinations.
     """
 
     allowed_fertilizers = get_allowed_fertilizers(ph)
-    ph_class = get_ph_class(ph)
 
-    if MANDATORY_FERTILIZER not in allowed_fertilizers:
+    if REQUIRED_FERTILIZER not in allowed_fertilizers:
         raise RuntimeError(
-            f"{MANDATORY_FERTILIZER} is mandatory, but it is not allowed "
-            f"for pH = {ph} ({ph_class})."
+            f"{REQUIRED_FERTILIZER} is required, but it is not allowed for pH={ph}."
         )
 
     optional_fertilizers = [
         fertilizer_name
         for fertilizer_name in allowed_fertilizers
-        if fertilizer_name != MANDATORY_FERTILIZER
+        if fertilizer_name != REQUIRED_FERTILIZER
     ]
 
     all_combinations = []
 
-    max_optional_size = min(
-        MAX_FERTILIZERS_USED - 1,
-        len(optional_fertilizers),
-    )
+    max_optional = MAX_FERTILIZERS_USED - 1
+    max_optional = min(max_optional, len(optional_fertilizers))
 
-    for size in range(0, max_optional_size + 1):
-        for optional_combo in combinations(optional_fertilizers, size):
-            combo = [MANDATORY_FERTILIZER] + list(optional_combo)
-            all_combinations.append(combo)
+    for size in range(0, max_optional + 1):
+        for combo in combinations(optional_fertilizers, size):
+            selected = [REQUIRED_FERTILIZER] + list(combo)
+            all_combinations.append(selected)
 
     return all_combinations
 
@@ -395,12 +378,6 @@ def generate_allowed_fertilizer_combinations(ph):
 def make_bounds_for_combo(selected_fertilizers, ph):
     """
     Create fertilizer bounds for one selected combination.
-
-    Estiércol de Vacuno:
-        4000 <= dose <= 6000
-
-    Other fertilizers:
-        0 <= dose <= 3000
     """
 
     bounds = []
@@ -409,7 +386,7 @@ def make_bounds_for_combo(selected_fertilizers, ph):
         if not fertilizer_allowed_for_ph(fertilizer_name, ph):
             bounds.append((0.0, 0.0))
 
-        elif fertilizer_name == MANDATORY_FERTILIZER:
+        elif fertilizer_name == REQUIRED_FERTILIZER:
             bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))
 
         else:
@@ -443,6 +420,9 @@ def nutrient_apport(doses, selected_fertilizers):
 def final_remaining(doses, requirements, selected_fertilizers):
     """
     Calculate remaining nutrient requirement.
+
+    Positive remaining means nutrient is still missing.
+    Negative remaining means nutrient is in excess.
     """
 
     requirements = effective_requirements(requirements)
@@ -451,22 +431,28 @@ def final_remaining(doses, requirements, selected_fertilizers):
     return requirements - apport
 
 
+# ------------------------------------------------------------
+# Core optimizer
+# ------------------------------------------------------------
 def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
     """
-    Solve the optimizer for one fertilizer combination.
+    Lexicographic optimizer for one fertilizer combination.
 
-    Hard constraints:
-        P2O5 supplied >= P2O5 required
-        K2O supplied >= K2O required
-        N supplied >= N required
-        CaO supplied >= CaO required
-        MgO supplied >= MgO required
+    Hard constraint:
+        supplied_i >= required_i
+
+    for:
+        P2O5, K2O, N, CaO, MgO
 
     S is ignored.
 
-    Estiércol de Vacuno is forced by:
-        1. being present in selected_fertilizers
-        2. having bounds 4000 <= dose <= 6000
+    Priority:
+        1. minimize P2O5 excess
+        2. minimize K2O excess
+        3. minimize N excess
+        4. minimize CaO excess
+        5. minimize MgO excess
+        6. minimize fertilizer dose and avoid Molimax
     """
 
     requirements = effective_requirements(requirements)
@@ -478,41 +464,26 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
     n_optimized_nutrients = len(optimized_indices)
     n_variables = n_fertilizers + n_optimized_nutrients
 
-    c = np.zeros(n_variables, dtype=float)
-
-    # Fertilizer dose costs
-    for i, fertilizer_name in enumerate(selected_fertilizers):
-        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
-            c[i] = LOW_PRIORITY_PENALTY
-        elif fertilizer_name == MANDATORY_FERTILIZER:
-            # Very small cost.
-            # This encourages using the minimum required amount,
-            # but Estiércol is already forced by the lower bound.
-            c[i] = 0.01
-        else:
-            c[i] = 1.0
-
-    # Excess nutrient penalties
-    for local_j, nutrient_index in enumerate(optimized_indices):
-        nutrient_name = NUTRIENTS[nutrient_index]
-        c[n_fertilizers + local_j] = EXCESS_WEIGHT_BY_NUTRIENT[nutrient_name]
-
     A_ub = []
     b_ub = []
 
+    # ------------------------------------------------------------
+    # Hard constraints and excess definitions
+    # ------------------------------------------------------------
     for local_j, nutrient_index in enumerate(optimized_indices):
         req = requirements[nutrient_index]
         nutrient_vector = formula[:, nutrient_index]
 
-        if req > 0:
-            # supplied_i >= required_i
-            #
-            # linprog uses:
-            #     A_ub @ x <= b_ub
-            #
-            # Therefore:
-            #     -supplied_i <= -required_i
+        # Hard constraint:
+        # supplied_i >= required_i
+        #
+        # linprog uses:
+        # A_ub @ x <= b_ub
+        #
+        # therefore:
+        # -supplied_i <= -required_i
 
+        if req > 0:
             row = np.zeros(n_variables, dtype=float)
             row[:n_fertilizers] = -nutrient_vector
 
@@ -524,7 +495,7 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         # excess_i >= supplied_i - required_i
         #
         # equivalent:
-        #     supplied_i - excess_i <= required_i
+        # supplied_i - excess_i <= required_i
 
         row = np.zeros(n_variables, dtype=float)
         row[:n_fertilizers] = nutrient_vector
@@ -533,19 +504,71 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         A_ub.append(row)
         b_ub.append(req)
 
-    A_ub = np.array(A_ub, dtype=float)
-    b_ub = np.array(b_ub, dtype=float)
-
     bounds = make_bounds_for_combo(selected_fertilizers, ph)
 
-    # Bounds for excess variables
     for _ in range(n_optimized_nutrients):
         bounds.append((0.0, None))
 
+    fixed_A = list(np.array(A_ub, dtype=float))
+    fixed_b = list(np.array(b_ub, dtype=float))
+
+    tolerance = 1e-7
+    fixed_excess_values = {}
+
+    # ------------------------------------------------------------
+    # Lexicographic optimization:
+    #
+    # optimize P first, fix it,
+    # then optimize K, fix it,
+    # then optimize N, fix it,
+    # then optimize CaO and MgO.
+    # ------------------------------------------------------------
+    for local_j, nutrient_index in enumerate(optimized_indices):
+        nutrient_name = NUTRIENTS[nutrient_index]
+
+        c = np.zeros(n_variables, dtype=float)
+        c[n_fertilizers + local_j] = 1.0
+
+        result = linprog(
+            c=c,
+            A_ub=np.array(fixed_A, dtype=float),
+            b_ub=np.array(fixed_b, dtype=float),
+            bounds=bounds,
+            method="highs",
+        )
+
+        if not result.success:
+            return result
+
+        best_excess = result.x[n_fertilizers + local_j]
+        fixed_excess_values[nutrient_name] = best_excess
+
+        # Fix this nutrient excess to the best value found.
+        row = np.zeros(n_variables, dtype=float)
+        row[n_fertilizers + local_j] = 1.0
+
+        fixed_A.append(row)
+        fixed_b.append(best_excess + tolerance)
+
+    # ------------------------------------------------------------
+    # Final stage:
+    # after nutrient excesses are fixed by priority,
+    # minimize fertilizer dose and avoid Molimax.
+    # ------------------------------------------------------------
+    c = np.zeros(n_variables, dtype=float)
+
+    for i, fertilizer_name in enumerate(selected_fertilizers):
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
+            c[i] = LOW_PRIORITY_PENALTY
+        elif fertilizer_name == REQUIRED_FERTILIZER:
+            c[i] = 0.01
+        else:
+            c[i] = 1.0
+
     result = linprog(
         c=c,
-        A_ub=A_ub,
-        b_ub=b_ub,
+        A_ub=np.array(fixed_A, dtype=float),
+        b_ub=np.array(fixed_b, dtype=float),
         bounds=bounds,
         method="highs",
     )
@@ -557,58 +580,55 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         result.x = full_x[:n_fertilizers]
         result.excess_variables = full_x[n_fertilizers:]
         result.selected_fertilizers = selected_fertilizers
+        result.fixed_excess_values = fixed_excess_values
 
     return result
 
 
-def score_solution(requirements, doses, selected_fertilizers):
+def solution_priority_key(requirements, doses, selected_fertilizers):
     """
-    Score one feasible solution.
+    Compare feasible solutions.
 
-    Lower score is better.
+    Lower tuple is better.
 
     Priority:
-        1. Avoid excess P2O5
-        2. Avoid excess K2O
-        3. Avoid excess N
-        4. Avoid excess CaO
-        5. Avoid excess MgO
-        6. Prefer fewer fertilizers
-        7. Penalize Molimax products
+        1. smallest P2O5 excess
+        2. smallest K2O excess
+        3. smallest N excess
+        4. smallest CaO excess
+        5. smallest MgO excess
+        6. avoid Molimax
+        7. fewer fertilizers
+        8. smaller total dose
     """
 
     requirements = effective_requirements(requirements)
-    formula = build_formula_from_table(selected_fertilizers)
-
-    apport = doses @ formula
+    apport = nutrient_apport(doses, selected_fertilizers)
     excess = np.maximum(apport - requirements, 0.0)
 
-    idx_p = list(NUTRIENTS).index("P2O5")
-    idx_k = list(NUTRIENTS).index("K2O")
-    idx_n = list(NUTRIENTS).index("N")
-    idx_ca = list(NUTRIENTS).index("CaO")
-    idx_mg = list(NUTRIENTS).index("MgO")
+    key = []
 
-    score = 0.0
+    for nutrient_name in OPTIMIZED_NUTRIENTS:
+        idx = list(NUTRIENTS).index(nutrient_name)
+        key.append(round(float(excess[idx]), 8))
 
-    score += 1_000_000.0 * excess[idx_p]
-    score += 100_000.0 * excess[idx_k]
-    score += 10_000.0 * excess[idx_n]
-    score += 1_000.0 * excess[idx_ca]
-    score += 1_000.0 * excess[idx_mg]
+    molimax_count = sum(
+        1 for fertilizer_name in selected_fertilizers
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS
+    )
 
-    # Prefer fewer fertilizers.
-    score += 100.0 * len(selected_fertilizers)
+    molimax_dose = sum(
+        float(dose)
+        for fertilizer_name, dose in zip(selected_fertilizers, doses)
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS
+    )
 
-    # Prefer lower total dose.
-    score += 0.01 * np.sum(doses)
+    key.append(molimax_count)
+    key.append(round(molimax_dose, 8))
+    key.append(len(selected_fertilizers))
+    key.append(round(float(np.sum(doses)), 8))
 
-    # Low priority for Molimax fertilizers.
-    for fertilizer_name in selected_fertilizers:
-        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
-            score += LOW_PRIORITY_PENALTY
-
-    return score
+    return tuple(key)
 
 
 def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6):
@@ -620,6 +640,9 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
 
     Ignores:
         S
+
+    Rule:
+        supplied_i >= required_i
     """
 
     requirements = effective_requirements(requirements)
@@ -630,35 +653,28 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
 
     print("\nSTRICT FINAL VALIDATION")
     print("Rule: supplied_i must be >= required_i for P2O5, K2O, N, CaO, and MgO.")
-    print("Rule: Estiércol de Vacuno must be included with at least 4000 kg/ha.")
     print("S is ignored because it is not measured.")
 
-    if MANDATORY_FERTILIZER not in selected_fertilizers:
-        raise RuntimeError(
-            f"\nINVALID OPTIMIZATION RESULT.\n"
-            f"{MANDATORY_FERTILIZER} was not selected."
-        )
-
-    estiercol_index = selected_fertilizers.index(MANDATORY_FERTILIZER)
-    estiercol_dose = doses[estiercol_index]
-
-    if estiercol_dose < ESTIERCOL_MIN - tolerance:
-        raise RuntimeError(
-            f"\nINVALID OPTIMIZATION RESULT.\n"
-            f"{MANDATORY_FERTILIZER} dose is below minimum.\n"
-            f"Required minimum = {ESTIERCOL_MIN:.2f}\n"
-            f"Found = {estiercol_dose:.2f}"
-        )
+    missing_lines = []
 
     for i, name in enumerate(NUTRIENTS):
         req = requirements[i]
         app = apport[i]
         rem = remaining[i]
 
-        if i in optimized_indices:
-            rule = "CHECKED"
-        else:
+        if name == "S":
             rule = "IGNORED"
+        elif i in optimized_indices:
+            rule = "CHECKED"
+
+            if rem > tolerance:
+                missing_lines.append(
+                    f"{name}: required = {req:.2f}, "
+                    f"supplied = {app:.2f}, "
+                    f"missing = {rem:.2f}"
+                )
+        else:
+            rule = "NOT OPTIMIZED"
 
         print(
             f"  {name:5s}: "
@@ -667,16 +683,6 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
             f"remaining = {rem:10.2f}   "
             f"{rule}"
         )
-
-    missing_lines = []
-
-    for i in optimized_indices:
-        if remaining[i] > tolerance:
-            missing_lines.append(
-                f"{NUTRIENTS[i]}: required = {requirements[i]:.2f}, "
-                f"supplied = {apport[i]:.2f}, "
-                f"missing = {remaining[i]:.2f}"
-            )
 
     if missing_lines:
         raise RuntimeError(
@@ -690,7 +696,7 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
 
 def objective(doses, requirements):
     """
-    Kept for compatibility with the bigger code.
+    Kept for compatibility with older code.
 
     The real optimizer is linprog inside optimize_fertilizers().
     """
@@ -700,7 +706,7 @@ def objective(doses, requirements):
 
 def make_constraints(requirements):
     """
-    Kept for compatibility with the bigger code.
+    Kept for compatibility with older code.
     """
 
     return []
@@ -712,37 +718,27 @@ def optimize_fertilizers(requirements, ph):
 
     Rules:
         - Estiércol de Vacuno is always included.
-        - Estiércol de Vacuno starts from minimum 4000 kg/ha.
         - Use only fertilizers allowed by pH.
-        - Use maximum 5 fertilizers total, including Estiércol de Vacuno.
-        - Optimize P2O5, K2O, N, CaO, and MgO.
+        - Use maximum 5 fertilizers.
+        - Optimize P2O5, K2O, N, CaO, MgO in that exact priority order.
         - Ignore S.
         - Molimax 20-20-20 and Molimax 16-16-16 have low priority.
-        - All optimized nutrient requirements must be covered.
-        - Excess nutrients are minimized as much as possible.
+        - Final supplied nutrient must be >= requirement.
     """
 
     requirements = effective_requirements(requirements)
-
     combinations_to_test = generate_allowed_fertilizer_combinations(ph)
 
     best_result = None
-    best_score = None
+    best_key = None
     best_combo = None
 
     print("\nSearching best fertilizer combination")
     print(f"pH = {ph}")
     print(f"pH class = {get_ph_class(ph)}")
-    print(f"Mandatory fertilizer = {MANDATORY_FERTILIZER}")
-    print(f"Estiércol minimum dose = {ESTIERCOL_MIN:.1f} kg/ha")
-    print(f"Estiércol maximum dose = {ESTIERCOL_MAX:.1f} kg/ha")
     print(f"Maximum fertilizers used = {MAX_FERTILIZERS_USED}")
-
-    print("\nAllowed fertilizers by pH:")
-    for fertilizer_name in get_allowed_fertilizers(ph):
-        print(f"  - {fertilizer_name}")
-
-    print(f"\nCombinations to test = {len(combinations_to_test)}")
+    print(f"Allowed fertilizers = {get_allowed_fertilizers(ph)}")
+    print(f"Combinations to test = {len(combinations_to_test)}")
 
     for combo in combinations_to_test:
         result = solve_linear_program_for_combo(
@@ -754,25 +750,30 @@ def optimize_fertilizers(requirements, ph):
         if not result.success:
             continue
 
+        # Round up selected doses before final validation.
+        # This is what will eventually be written to Excel.
+        rounded_doses = round_up_to_1_decimal(result.x)
+
         try:
             validate_solution(
                 requirements=requirements,
-                doses=result.x,
+                doses=rounded_doses,
                 selected_fertilizers=combo,
             )
         except RuntimeError:
             continue
 
-        score = score_solution(
+        key = solution_priority_key(
             requirements=requirements,
-            doses=result.x,
+            doses=rounded_doses,
             selected_fertilizers=combo,
         )
 
-        if best_score is None or score < best_score:
-            best_score = score
+        if best_key is None or key < best_key:
+            best_key = key
             best_result = result
             best_combo = combo
+            best_result.x = rounded_doses
 
     if best_result is None:
         raise RuntimeError(
@@ -782,16 +783,18 @@ def optimize_fertilizers(requirements, ph):
             "  2. pH removed too many fertilizers.\n"
             "  3. OTHER_FERTILIZER_MAX is too low.\n"
             "  4. ESTIERCOL_MAX is too low.\n"
-            "  5. Estiércol de Vacuno is forced with minimum 4000 kg/ha.\n"
-            "  6. S is ignored, but P2O5, K2O, N, CaO, and MgO must be satisfied.\n"
+            "  5. P2O5, K2O, N, CaO, and MgO must all be satisfied.\n"
+            "  6. S is ignored and cannot help feasibility.\n"
         )
 
     best_result.selected_fertilizers = best_combo
-    best_result.best_score = best_score
+    best_result.best_key = best_key
 
     print("\nBest fertilizer combination found:")
     for fertilizer_name in best_combo:
         print(f"  - {fertilizer_name}")
+
+    print(f"\nBest priority key: {best_key}")
 
     validate_solution(
         requirements=requirements,
@@ -802,6 +805,9 @@ def optimize_fertilizers(requirements, ph):
     return best_result
 
 
+# ------------------------------------------------------------
+# Output helpers
+# ------------------------------------------------------------
 def get_full_dose_vector(result):
     """
     Convert selected fertilizer result to full fertilizer vector.
@@ -826,6 +832,9 @@ def save_optimal_values_csv(output_csv, result):
     Save all fertilizers to CSV.
 
     Fertilizers not selected by the optimizer are saved as zero.
+
+    Doses are rounded UP to 1 decimal to avoid Excel recalculation
+    producing nutrient sums slightly below the requirements.
     """
 
     if not result.success:
@@ -835,7 +844,7 @@ def save_optimal_values_csv(output_csv, result):
         )
 
     full_doses = get_full_dose_vector(result)
-    full_doses = np.round(full_doses, 1)
+    full_doses = round_up_to_1_decimal(full_doses)
 
     df = pd.DataFrame(
         [full_doses],
@@ -884,10 +893,7 @@ def print_optimization_results(requirements, result):
     for fertilizer_name in selected_fertilizers:
         priority = ""
 
-        if fertilizer_name == MANDATORY_FERTILIZER:
-            priority = "MANDATORY"
-
-        elif fertilizer_name in LOW_PRIORITY_FERTILIZERS:
+        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
             priority = "LOW PRIORITY"
 
         print(f"  - {fertilizer_name} {priority}")
@@ -933,9 +939,6 @@ def print_optimization_results(requirements, result):
         else:
             status = "NOT USED"
 
-        if fertilizer_name == MANDATORY_FERTILIZER:
-            status += ", MANDATORY"
-
         print(
             f"  {fertilizer_name:35s}: "
             f"{dose:10.1f} kg/ha   "
@@ -946,12 +949,8 @@ def print_optimization_results(requirements, result):
     print("\nNutrient balance:")
     print("Hard rule:")
     print("  supplied_i >= required_i for P2O5, K2O, N, CaO, and MgO")
-    print("  Estiércol de Vacuno is always included with at least 4000 kg/ha.")
-    print("Important:")
-    print("  Because Estiércol is mandatory, some excess nutrients may be unavoidable.")
-    print("  The optimizer minimizes excess, but it cannot remove nutrients already added by Estiércol.")
     print("Priority:")
-    print("  P2O5 first, then K2O, then N, then CaO and MgO")
+    print("  P2O5 first, then K2O, then N, then CaO, then MgO")
     print("S is ignored because it is not measured.")
     print(f"Reference tolerance for status: {EXCESS_TOLERANCE:.1f} kg/ha")
 
@@ -997,12 +996,12 @@ def print_optimization_results(requirements, result):
 
     if all_required_covered:
         print("  OK: P2O5, K2O, N, CaO, and MgO requirements are covered.")
-        print(f"  OK: {MANDATORY_FERTILIZER} was included.")
+        print(f"  OK: {REQUIRED_FERTILIZER} was included.")
     else:
         print("  WARNING: at least one optimized nutrient requirement is missing.")
 
     print("\nDebug information:")
     print(f"  pH-selected fertilizers: {selected_fertilizers}")
-    print(f"  Best score: {result.best_score}")
+    print(f"  Best priority key: {getattr(result, 'best_key', None)}")
     print(f"  Nutrients: {list(NUTRIENTS)}")
     print(f"  All fertilizers: {FERTILIZER_NAMES}")
