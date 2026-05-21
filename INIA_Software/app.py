@@ -9,13 +9,30 @@ import threading
 import queue
 import sys
 import os
-import signal
+import webbrowser
+import time
+import traceback
 
 
 # ------------------------------------------------------------
-# Import crop/product list from products.py
+# Products / crops from products.py
 # ------------------------------------------------------------
-from products import ALLOWED_PRODUCTS
+try:
+    from products import ALLOWED_PRODUCTS
+except Exception as e:
+    print("WARNING: Could not import ALLOWED_PRODUCTS from products.py")
+    print("Error:", e)
+
+    ALLOWED_PRODUCTS = [
+        "PAPA NATIVA",
+        "PAPA MEJORADA",
+        "QUINUA",
+        "CAÑIHUA",
+        "AVENA",
+        "CEBADA",
+        "HABA",
+        "TRIGO",
+    ]
 
 
 app = Flask(__name__)
@@ -34,12 +51,14 @@ DEFAULT_PDF_FOLDER = "pdfs"
 # ------------------------------------------------------------
 # Upload folder
 # ------------------------------------------------------------
-UPLOAD_DIR = Path("uploaded_inputs")
+BASE_DIR = Path(__file__).resolve().parent
+
+UPLOAD_DIR = BASE_DIR / "uploaded_inputs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ------------------------------------------------------------
-# Crop/product options from products.py
+# Crop/product options
 # ------------------------------------------------------------
 CULTIVOS = ALLOWED_PRODUCTS
 
@@ -93,13 +112,14 @@ def save_uploaded_file(file_storage, default_path):
 
 def enqueue_output(proc):
     """
-    Read subprocess output line by line and send it to the queue.
+    Read subprocess output line by line and send it to the live terminal queue.
     """
 
     try:
         for line in iter(proc.stdout.readline, ""):
             if line:
                 output_queue.put(line.rstrip())
+
     except Exception as e:
         output_queue.put(f"[ERROR READING PROCESS OUTPUT] {e}")
 
@@ -122,6 +142,40 @@ def index():
         report_root=DEFAULT_REPORT_ROOT,
         pdf_folder=DEFAULT_PDF_FOLDER,
     )
+
+
+@app.route("/browse-folder")
+def browse_folder():
+    """
+    Open native Windows folder selector.
+
+    This works when Flask is running locally on the same Windows machine.
+    """
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        path = filedialog.askdirectory(
+            title="Seleccionar carpeta"
+        )
+
+        root.destroy()
+
+        return jsonify({
+            "path": path,
+            "error": "",
+        })
+
+    except Exception as e:
+        return jsonify({
+            "path": "",
+            "error": str(e),
+        })
 
 
 @app.route("/generate", methods=["POST"])
@@ -161,7 +215,7 @@ def generate():
             })
 
         # ------------------------------------------------------------
-        # Uploaded files from index.html
+        # Uploaded files from index.html.
         #
         # These names must match the HTML:
         #   resultados_excel_file
@@ -224,27 +278,14 @@ def generate():
         output_queue.put("")
 
         try:
-            popen_kwargs = {
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.STDOUT,
-                "text": True,
-                "bufsize": 1,
-                "universal_newlines": True,
-                "cwd": Path(__file__).resolve().parent,
-            }
-
-            # On Linux/macOS, create a new process group
-            # so /stop can kill child processes too.
-            if os.name != "nt":
-                popen_kwargs["preexec_fn"] = os.setsid
-
-            # On Windows, create a new process group when possible.
-            if os.name == "nt":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-
             process = subprocess.Popen(
                 cmd,
-                **popen_kwargs,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                cwd=BASE_DIR,
             )
 
             thread = threading.Thread(
@@ -288,7 +329,7 @@ def stream():
                     break
 
             except queue.Empty:
-                # Keep connection alive.
+                # Keep the connection alive.
                 yield "data: \n\n"
 
     return Response(
@@ -305,6 +346,8 @@ def stream():
 def stop():
     """
     Stop currently running process.
+
+    Windows version: use process.terminate().
     """
 
     global process
@@ -317,17 +360,7 @@ def stop():
             })
 
         try:
-            if os.name == "nt":
-                try:
-                    process.send_signal(signal.CTRL_BREAK_EVENT)
-                except Exception:
-                    process.terminate()
-            else:
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                except Exception:
-                    process.terminate()
-
+            process.terminate()
             output_queue.put("[PROCESS_STOPPED]")
 
             return jsonify({"ok": True})
@@ -340,16 +373,13 @@ def stop():
 
 
 if __name__ == "__main__":
-    import webbrowser
-    import time
-    import traceback
-
     url = "http://127.0.0.1:5000"
 
     try:
         print("=" * 80)
         print("Generador de Reportes INIA Puno")
         print("=" * 80)
+        print(f"Carpeta actual: {BASE_DIR}")
         print(f"Abriendo navegador en: {url}")
         print("No cierres esta ventana mientras usas la aplicación.")
         print("=" * 80)
