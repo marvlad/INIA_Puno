@@ -770,18 +770,18 @@ def build_excel_from_template(
         print("P_mg/kg) not found or invalid. AL3 and AM3 set to 0.")
     elif ph_number is None:
         print("pH not found or invalid. Cannot choose Olsen/Bray. AL3 and AM3 set to 0.")
-    elif ph_number < 7.0:
+    elif ph_number < 6.5:
         target_ws["AM3"] = p_number
 
         print(f"pH: {ph_number}")
-        print("Using Bray because pH < 7.0")
+        print("Using Bray because pH < 6.5")
         print("AL3 / Fósforo Disponible Olsen: 0")
         print(f"AM3 / Fósforo Disponible Bray y Kurtz: {p_number}")
     else:
         target_ws["AL3"] = p_number
 
         print(f"pH: {ph_number}")
-        print("Using Olsen because pH >= 7.0")
+        print("Using Olsen because pH >= 6.5")
         print(f"AL3 / Fósforo Disponible Olsen: {p_number}")
         print("AM3 / Fósforo Disponible Bray y Kurtz: 0")
 
@@ -822,4 +822,4 @@ def build_excel_from_template(
     print("\nExcel created successfully:")
     print(f" {output_excel}")
 
-    return output_excel
+    return output_excel, ph_number
