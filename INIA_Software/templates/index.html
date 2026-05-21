@@ -83,6 +83,29 @@
             background: #991b1b;
         }
 
+        .small-btn {
+            width: 185px;
+            margin-top: 6px;
+            background: #2563eb;
+            padding: 10px 14px;
+            font-size: 14px;
+            border-radius: 8px;
+        }
+
+        .small-btn:hover {
+            background: #1d4ed8;
+        }
+
+        .path-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .path-row input {
+            flex: 1;
+        }
+
         .hint {
             color: #6b7280;
             font-size: 13px;
@@ -219,30 +242,48 @@
                 <h3>Carpetas</h3>
 
                 <label>Carpeta central de reportes</label>
-                <input
-                    type="text"
-                    name="report_root"
-                    value="{{ report_root }}"
-                    required
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="report_root"
+                        name="report_root"
+                        value="{{ report_root }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFolder('report_root')"
+                    >
+                        Seleccionar carpeta
+                    </button>
+                </div>
                 <div class="hint">
-                    Carpeta donde se guardarán los reportes generados. Esta ruta se escribe manualmente.
+                    Ruta de la carpeta donde se guardarán los reportes generados.
                 </div>
                 <div class="default-path">
                     Por defecto: {{ report_root }}
                 </div>
 
                 <label>Carpeta de PDFs originales SU</label>
-                <input
-                    type="file"
-                    name="pdf_folder_files"
-                    accept=".pdf"
-                    webkitdirectory
-                    directory
-                    multiple
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="pdf_folder"
+                        name="pdf_folder"
+                        value="{{ pdf_folder }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFolder('pdf_folder')"
+                    >
+                        Seleccionar carpeta
+                    </button>
+                </div>
                 <div class="hint">
-                    Selecciona la carpeta donde están los PDFs originales SU. Si no seleccionas nada, se usa la carpeta por defecto.
+                    Ruta de la carpeta donde están los PDFs originales SU.
                 </div>
                 <div class="default-path">
                     Por defecto: {{ pdf_folder }}
@@ -290,6 +331,21 @@
             if (eventSource !== null) {
                 eventSource.close();
                 eventSource = null;
+            }
+        }
+
+        async function selectFolder(inputId) {
+            try {
+                const response = await fetch("/browse-folder");
+                const data = await response.json();
+
+                if (data.path) {
+                    document.getElementById(inputId).value = data.path;
+                } else if (data.error) {
+                    appendTerminal("\nError seleccionando carpeta: " + data.error + "\n");
+                }
+            } catch (error) {
+                appendTerminal("\nError seleccionando carpeta: " + String(error) + "\n");
             }
         }
 
