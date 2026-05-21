@@ -69,6 +69,11 @@
             background: #14532d;
         }
 
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         .stop-btn {
             background: #b91c1c;
             margin-left: 10px;
@@ -127,11 +132,6 @@
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
-        }
-
-        .disabled {
-            opacity: 0.6;
-            pointer-events: none;
         }
 
         .file-note {
@@ -246,7 +246,7 @@
                     Generar reporte
                 </button>
 
-                <button id="stop-btn" type="button" class="stop-btn" onclick="stopProcess()">
+                <button id="stop-btn" type="button" class="stop-btn">
                     Detener
                 </button>
             </div>
@@ -262,80 +262,74 @@
     <script>
         let eventSource = null;
 
+        const form = document.getElementById("generate-form");
+        const generateBtn = document.getElementById("generate-btn");
+        const stopBtn = document.getElementById("stop-btn");
+        const terminal = document.getElementById("terminal");
+        const statusBox = document.getElementById("status");
+
         function appendTerminal(text) {
-            const terminal = document.getElementById("terminal");
             terminal.textContent += text;
             terminal.scrollTop = terminal.scrollHeight;
         }
 
         function setRunningState(isRunning) {
-            const generateBtn = document.getElementById("generate-btn");
+            generateBtn.disabled = isRunning;
+            stopBtn.disabled = false;
+        }
 
-            if (isRunning) {
-                generateBtn.classList.add("disabled");
-            } else {
-                generateBtn.classList.remove("disabled");
+        function closeStream() {
+            if (eventSource !== null) {
+                eventSource.close();
+                eventSource = null;
             }
         }
 
         function startStream() {
-            if (eventSource !== null) {
-                eventSource.close();
-            }
+            closeStream();
 
             eventSource = new EventSource("/stream");
 
             eventSource.onmessage = function(event) {
-                if (event.data.trim() !== "") {
+                if (event.data && event.data.trim() !== "") {
                     appendTerminal(event.data + "\n");
                 }
 
                 if (event.data.includes("[PROCESS_FINISHED]")) {
-                    document.getElementById("status").textContent = "Proceso terminado.";
+                    statusBox.textContent = "Proceso terminado.";
                     setRunningState(false);
-
-                    if (eventSource !== null) {
-                        eventSource.close();
-                        eventSource = null;
-                    }
+                    closeStream();
                 }
 
                 if (event.data.includes("[PROCESS_FINISHED_WITH_ERROR]")) {
-                    document.getElementById("status").textContent = "Proceso terminó con error.";
+                    statusBox.textContent = "Proceso terminó con error.";
                     setRunningState(false);
-
-                    if (eventSource !== null) {
-                        eventSource.close();
-                        eventSource = null;
-                    }
+                    closeStream();
                 }
 
                 if (event.data.includes("[PROCESS_STOPPED]")) {
-                    document.getElementById("status").textContent = "Proceso detenido.";
+                    statusBox.textContent = "Proceso detenido.";
                     setRunningState(false);
-
-                    if (eventSource !== null) {
-                        eventSource.close();
-                        eventSource = null;
-                    }
+                    closeStream();
                 }
             };
 
             eventSource.onerror = function() {
-                document.getElementById("status").textContent = "Conexión del registro cerrada.";
+                appendTerminal("\n[STREAM CLOSED]\n");
+                statusBox.textContent = "Conexión del registro cerrada.";
+                setRunningState(false);
+                closeStream();
             };
         }
 
-        document.getElementById("generate-form").addEventListener("submit", async function(event) {
+        form.addEventListener("submit", async function(event) {
             event.preventDefault();
 
-            const terminal = document.getElementById("terminal");
             terminal.textContent = "";
-
-            document.getElementById("status").textContent = "Ejecutando...";
+            statusBox.textContent = "Iniciando...";
             setRunningState(true);
 
-            const formData = new FormData(event.target);
+            const formData = new FormData(form);
 
             try {
                 const response = await fetch("/generate", {
@@ -346,40 +340,45 @@
                 const data = await response.json();
 
                 if (!data.ok) {
-                    document.getElementById("status").textContent = "Error al iniciar.";
+                    statusBox.textContent = "Error al iniciar.";
                     appendTerminal(data.error + "\n");
                     setRunningState(false);
                     return;
                 }
 
+                statusBox.textContent = "Ejecutando...";
                 startStream();
 
             } catch (error) {
-                document.getElementById("status").textContent = "Error de conexión.";
+                statusBox.textContent = "Error de conexión.";
                 appendTerminal(String(error) + "\n");
                 setRunningState(false);
             }
         });
 
-        async function stopProcess() {
+        stopBtn.addEventListener("click", async function() {
             try {
+                appendTerminal("\n[STOP REQUESTED]\n");
+                statusBox.textContent = "Deteniendo...";
+
                 const response = await fetch("/stop", {
                     method: "POST"
                 });
 
                 const data = await response.json();
 
-                if (data.ok) {
-                    appendTerminal("\n[STOP REQUESTED]\n");
-                    document.getElementById("status").textContent = "Deteniendo...";
-                } else {
-                    appendTerminal("\n" + data.error + "\n");
+                if (!data.ok) {
+                    appendTerminal(data.error + "\n");
+                    statusBox.textContent = "No se pudo detener.";
+                    setRunningState(false);
                 }
 
             } catch (error) {
                 appendTerminal("\nError al detener: " + String(error) + "\n");
+                statusBox.textContent = "Error al detener.";
+                setRunningState(false);
             }
-        }
+        });
     </script>
 </body>
 </html>
