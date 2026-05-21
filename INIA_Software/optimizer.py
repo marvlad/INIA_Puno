@@ -23,8 +23,20 @@ OTHER_FERTILIZER_MAX = 3000.0
 
 # ------------------------------------------------------------
 # Maximum number of fertilizers selected by optimizer
+#
+# Important:
+#   This includes Estiércol de Vacuno.
+#   Therefore, if MAX_FERTILIZERS_USED = 5,
+#   the optimizer can use:
+#       1 mandatory Estiércol + up to 4 additional fertilizers
 # ------------------------------------------------------------
 MAX_FERTILIZERS_USED = 5
+
+
+# ------------------------------------------------------------
+# Mandatory fertilizer
+# ------------------------------------------------------------
+MANDATORY_FERTILIZER = "Estiércol de Vacuno"
 
 
 # ------------------------------------------------------------
@@ -79,14 +91,14 @@ EXCESS_TOLERANCE = 50.0
 
 
 # ------------------------------------------------------------
-# Full fertilizer table from your image.
+# Full fertilizer table
 #
 # Nutrient values are percentages.
 #
 # pH columns:
-#   acid     -> pH < 5.5
-#   alkaline -> pH > 8.0
-#   neutral  -> 5.5 <= pH <= 8.0
+#   acid      -> pH < 5.5
+#   alkaline  -> pH > 8.0
+#   neutral   -> 5.5 <= pH <= 8.0
 # ------------------------------------------------------------
 FERTILIZER_TABLE = {
     "Estiércol de Vacuno": {
@@ -341,20 +353,41 @@ def get_optimized_nutrient_indices():
 
 def generate_allowed_fertilizer_combinations(ph):
     """
-    Generate all possible fertilizer combinations up to MAX_FERTILIZERS_USED.
+    Generate all possible fertilizer combinations.
 
-    Fertilizers not allowed by pH are removed before making combinations.
+    Rules:
+        - Estiércol de Vacuno is always included.
+        - Estiércol de Vacuno must be allowed by pH.
+        - Other fertilizers are selected only if allowed by pH.
+        - Maximum total fertilizers = MAX_FERTILIZERS_USED.
     """
 
     allowed_fertilizers = get_allowed_fertilizers(ph)
+    ph_class = get_ph_class(ph)
+
+    if MANDATORY_FERTILIZER not in allowed_fertilizers:
+        raise RuntimeError(
+            f"{MANDATORY_FERTILIZER} is mandatory, but it is not allowed "
+            f"for pH = {ph} ({ph_class})."
+        )
+
+    optional_fertilizers = [
+        fertilizer_name
+        for fertilizer_name in allowed_fertilizers
+        if fertilizer_name != MANDATORY_FERTILIZER
+    ]
 
     all_combinations = []
 
-    max_size = min(MAX_FERTILIZERS_USED, len(allowed_fertilizers))
+    max_optional_size = min(
+        MAX_FERTILIZERS_USED - 1,
+        len(optional_fertilizers),
+    )
 
-    for size in range(1, max_size + 1):
-        for combo in combinations(allowed_fertilizers, size):
-            all_combinations.append(list(combo))
+    for size in range(0, max_optional_size + 1):
+        for optional_combo in combinations(optional_fertilizers, size):
+            combo = [MANDATORY_FERTILIZER] + list(optional_combo)
+            all_combinations.append(combo)
 
     return all_combinations
 
@@ -362,6 +395,12 @@ def generate_allowed_fertilizer_combinations(ph):
 def make_bounds_for_combo(selected_fertilizers, ph):
     """
     Create fertilizer bounds for one selected combination.
+
+    Estiércol de Vacuno:
+        4000 <= dose <= 6000
+
+    Other fertilizers:
+        0 <= dose <= 3000
     """
 
     bounds = []
@@ -370,7 +409,7 @@ def make_bounds_for_combo(selected_fertilizers, ph):
         if not fertilizer_allowed_for_ph(fertilizer_name, ph):
             bounds.append((0.0, 0.0))
 
-        elif fertilizer_name == "Estiércol de Vacuno":
+        elif fertilizer_name == MANDATORY_FERTILIZER:
             bounds.append((ESTIERCOL_MIN, ESTIERCOL_MAX))
 
         else:
@@ -424,6 +463,10 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         MgO supplied >= MgO required
 
     S is ignored.
+
+    Estiércol de Vacuno is forced by:
+        1. being present in selected_fertilizers
+        2. having bounds 4000 <= dose <= 6000
     """
 
     requirements = effective_requirements(requirements)
@@ -441,7 +484,10 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
     for i, fertilizer_name in enumerate(selected_fertilizers):
         if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
             c[i] = LOW_PRIORITY_PENALTY
-        elif fertilizer_name == "Estiércol de Vacuno":
+        elif fertilizer_name == MANDATORY_FERTILIZER:
+            # Very small cost.
+            # This encourages using the minimum required amount,
+            # but Estiércol is already forced by the lower bound.
             c[i] = 0.01
         else:
             c[i] = 1.0
@@ -455,7 +501,6 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
     b_ub = []
 
     for local_j, nutrient_index in enumerate(optimized_indices):
-        nutrient_name = NUTRIENTS[nutrient_index]
         req = requirements[nutrient_index]
         nutrient_vector = formula[:, nutrient_index]
 
@@ -493,6 +538,7 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
 
     bounds = make_bounds_for_combo(selected_fertilizers, ph)
 
+    # Bounds for excess variables
     for _ in range(n_optimized_nutrients):
         bounds.append((0.0, None))
 
@@ -584,7 +630,25 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
 
     print("\nSTRICT FINAL VALIDATION")
     print("Rule: supplied_i must be >= required_i for P2O5, K2O, N, CaO, and MgO.")
+    print("Rule: Estiércol de Vacuno must be included with at least 4000 kg/ha.")
     print("S is ignored because it is not measured.")
+
+    if MANDATORY_FERTILIZER not in selected_fertilizers:
+        raise RuntimeError(
+            f"\nINVALID OPTIMIZATION RESULT.\n"
+            f"{MANDATORY_FERTILIZER} was not selected."
+        )
+
+    estiercol_index = selected_fertilizers.index(MANDATORY_FERTILIZER)
+    estiercol_dose = doses[estiercol_index]
+
+    if estiercol_dose < ESTIERCOL_MIN - tolerance:
+        raise RuntimeError(
+            f"\nINVALID OPTIMIZATION RESULT.\n"
+            f"{MANDATORY_FERTILIZER} dose is below minimum.\n"
+            f"Required minimum = {ESTIERCOL_MIN:.2f}\n"
+            f"Found = {estiercol_dose:.2f}"
+        )
 
     for i, name in enumerate(NUTRIENTS):
         req = requirements[i]
@@ -647,11 +711,15 @@ def optimize_fertilizers(requirements, ph):
     Find the best fertilizer combination.
 
     Rules:
+        - Estiércol de Vacuno is always included.
+        - Estiércol de Vacuno starts from minimum 4000 kg/ha.
         - Use only fertilizers allowed by pH.
-        - Use maximum 5 fertilizers.
+        - Use maximum 5 fertilizers total, including Estiércol de Vacuno.
         - Optimize P2O5, K2O, N, CaO, and MgO.
         - Ignore S.
         - Molimax 20-20-20 and Molimax 16-16-16 have low priority.
+        - All optimized nutrient requirements must be covered.
+        - Excess nutrients are minimized as much as possible.
     """
 
     requirements = effective_requirements(requirements)
@@ -665,9 +733,16 @@ def optimize_fertilizers(requirements, ph):
     print("\nSearching best fertilizer combination")
     print(f"pH = {ph}")
     print(f"pH class = {get_ph_class(ph)}")
+    print(f"Mandatory fertilizer = {MANDATORY_FERTILIZER}")
+    print(f"Estiércol minimum dose = {ESTIERCOL_MIN:.1f} kg/ha")
+    print(f"Estiércol maximum dose = {ESTIERCOL_MAX:.1f} kg/ha")
     print(f"Maximum fertilizers used = {MAX_FERTILIZERS_USED}")
-    print(f"Allowed fertilizers = {get_allowed_fertilizers(ph)}")
-    print(f"Combinations to test = {len(combinations_to_test)}")
+
+    print("\nAllowed fertilizers by pH:")
+    for fertilizer_name in get_allowed_fertilizers(ph):
+        print(f"  - {fertilizer_name}")
+
+    print(f"\nCombinations to test = {len(combinations_to_test)}")
 
     for combo in combinations_to_test:
         result = solve_linear_program_for_combo(
@@ -707,7 +782,8 @@ def optimize_fertilizers(requirements, ph):
             "  2. pH removed too many fertilizers.\n"
             "  3. OTHER_FERTILIZER_MAX is too low.\n"
             "  4. ESTIERCOL_MAX is too low.\n"
-            "  5. S is ignored, but P2O5, K2O, N, CaO, and MgO must be satisfied.\n"
+            "  5. Estiércol de Vacuno is forced with minimum 4000 kg/ha.\n"
+            "  6. S is ignored, but P2O5, K2O, N, CaO, and MgO must be satisfied.\n"
         )
 
     best_result.selected_fertilizers = best_combo
@@ -808,7 +884,10 @@ def print_optimization_results(requirements, result):
     for fertilizer_name in selected_fertilizers:
         priority = ""
 
-        if fertilizer_name in LOW_PRIORITY_FERTILIZERS:
+        if fertilizer_name == MANDATORY_FERTILIZER:
+            priority = "MANDATORY"
+
+        elif fertilizer_name in LOW_PRIORITY_FERTILIZERS:
             priority = "LOW PRIORITY"
 
         print(f"  - {fertilizer_name} {priority}")
@@ -854,6 +933,9 @@ def print_optimization_results(requirements, result):
         else:
             status = "NOT USED"
 
+        if fertilizer_name == MANDATORY_FERTILIZER:
+            status += ", MANDATORY"
+
         print(
             f"  {fertilizer_name:35s}: "
             f"{dose:10.1f} kg/ha   "
@@ -864,6 +946,10 @@ def print_optimization_results(requirements, result):
     print("\nNutrient balance:")
     print("Hard rule:")
     print("  supplied_i >= required_i for P2O5, K2O, N, CaO, and MgO")
+    print("  Estiércol de Vacuno is always included with at least 4000 kg/ha.")
+    print("Important:")
+    print("  Because Estiércol is mandatory, some excess nutrients may be unavoidable.")
+    print("  The optimizer minimizes excess, but it cannot remove nutrients already added by Estiércol.")
     print("Priority:")
     print("  P2O5 first, then K2O, then N, then CaO and MgO")
     print("S is ignored because it is not measured.")
@@ -911,6 +997,7 @@ def print_optimization_results(requirements, result):
 
     if all_required_covered:
         print("  OK: P2O5, K2O, N, CaO, and MgO requirements are covered.")
+        print(f"  OK: {MANDATORY_FERTILIZER} was included.")
     else:
         print("  WARNING: at least one optimized nutrient requirement is missing.")
 
