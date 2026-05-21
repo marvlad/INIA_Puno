@@ -83,6 +83,29 @@
             background: #991b1b;
         }
 
+        .small-btn {
+            width: 130px;
+            margin-top: 6px;
+            background: #2563eb;
+            padding: 10px 14px;
+            font-size: 14px;
+            border-radius: 8px;
+        }
+
+        .small-btn:hover {
+            background: #1d4ed8;
+        }
+
+        .path-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .path-row input {
+            flex: 1;
+        }
+
         .hint {
             color: #6b7280;
             font-size: 13px;
@@ -219,25 +242,45 @@
                 <h3>Carpetas</h3>
 
                 <label>Carpeta central de reportes</label>
-                <input
-                    type="text"
-                    name="report_root"
-                    value="{{ report_root }}"
-                    required
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="report_root"
+                        name="report_root"
+                        value="{{ report_root }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFolder('report_root')"
+                    >
+                        Seleccionar
+                    </button>
+                </div>
                 <div class="hint">
-                    Esta carpeta se puede escribir manualmente. Si no la cambias, se usa el valor por defecto.
+                    Carpeta donde se guardarán los reportes generados.
                 </div>
 
                 <label>Carpeta de PDFs originales SU</label>
-                <input
-                    type="text"
-                    name="pdf_folder"
-                    value="{{ pdf_folder }}"
-                    required
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="pdf_folder"
+                        name="pdf_folder"
+                        value="{{ pdf_folder }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFolder('pdf_folder')"
+                    >
+                        Seleccionar
+                    </button>
+                </div>
                 <div class="hint">
-                    Ruta de la carpeta donde están los PDFs originales SU.
+                    Carpeta donde están los PDFs originales SU.
                 </div>
             </div>
 
@@ -282,6 +325,21 @@
             if (eventSource !== null) {
                 eventSource.close();
                 eventSource = null;
+            }
+        }
+
+        async function selectFolder(inputId) {
+            try {
+                const response = await fetch("/browse-folder");
+                const data = await response.json();
+
+                if (data.path) {
+                    document.getElementById(inputId).value = data.path;
+                } else if (data.error) {
+                    appendTerminal("\nError seleccionando carpeta: " + data.error + "\n");
+                }
+            } catch (error) {
+                appendTerminal("\nError seleccionando carpeta: " + String(error) + "\n");
             }
         }
 
