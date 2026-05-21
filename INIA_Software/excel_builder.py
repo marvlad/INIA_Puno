@@ -24,7 +24,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 TARGET_SHEET = "Base_Datos"
 TARGET_HEADER_ROW = 2
 TARGET_ROW_TO_REPLACE = 3
-
 IMAGE_SCALE = 0.40
 
 
@@ -60,19 +59,17 @@ def parse_clima(value):
     """
     Converts clima input to Excel code:
 
-        1 or Cálido y lluvioso -> 1
-        2 or Frío y lluvioso   -> 2
-        3 or Frío y seco       -> 3
+    1 or Cálido y lluvioso -> 1
+    2 or Frío y lluvioso   -> 2
+    3 or Frío y seco       -> 3
 
     The input text does NOT need to be uppercase.
     For example:
         Cálido y lluvioso
         Frío y lluvioso
         Frío y seco
-
     are accepted.
     """
-
     if value is None:
         return None
 
@@ -98,7 +95,6 @@ def clima_code_to_label(clima_code):
     Converts clima code to the full climate label required by
     get_nitrogen_mineralization.py
     """
-
     clima_map = {
         1: "Cálido y lluvioso",
         2: "Frío y lluvioso",
@@ -168,7 +164,6 @@ def get_first_available(row_values, headers, header_names):
     Try several possible header names and return the first non-empty value.
     Useful when Excel files use slightly different names.
     """
-
     for header_name in header_names:
         value = get(row_values, headers, header_name)
 
@@ -203,7 +198,6 @@ def find_person_row(ws, headers, name, start_row):
 
     if possible_matches:
         print("\nPosibles coincidencias:")
-
         for row_index, value in possible_matches:
             print(f" Row {row_index}: {value}")
 
@@ -259,7 +253,6 @@ def find_sheet_name(wb, candidates):
     Finds the first existing sheet name from a list of candidates.
     Useful because some files may have accent/encoding differences.
     """
-
     for candidate in candidates:
         if candidate in wb.sheetnames:
             return candidate
@@ -276,21 +269,18 @@ def write_efficiency_and_mineralization_to_nec_fert(
     """
     Writes:
 
-        Nec_fert!G27 = N efficiency
-        Nec_fert!G28 = P efficiency
-        Nec_fert!G29 = K efficiency
-        Nec_fert!G30 = Ca efficiency
-        Nec_fert!G31 = Mg efficiency
-        Nec_fert!G32 = S efficiency
+    Nec_fert!G27 = N efficiency
+    Nec_fert!G28 = P efficiency
+    Nec_fert!G29 = K efficiency
+    Nec_fert!G30 = Ca efficiency
+    Nec_fert!G31 = Mg efficiency
+    Nec_fert!G32 = S efficiency
 
-        Nec_fert!D21 = nitrogen mineralization percentage
+    Nec_fert!D21 = nitrogen mineralization percentage
 
     Inputs:
-        Efficiencies:
-            pH + texture
-
-        Mineralization:
-            texture + clima
+        Efficiencies: pH + texture
+        Mineralization: texture + clima
     """
 
     sheet_name = find_sheet_name(
@@ -392,7 +382,6 @@ def reinsert_images(wb, image_dir):
         image4.png
         image5.jpeg
     """
-
     image_dir = Path(image_dir)
 
     if not image_dir.exists():
@@ -539,8 +528,10 @@ def build_excel_from_template(
     )
 
     input_cultivo = get(person_row_values, input_headers, "CULTIVO A INSTALAR")
+
     ph_value = get(person_row_values, input_headers, "pH")
     p_value = get(person_row_values, input_headers, "P_mg/kg)")
+
     clima_value = get(person_row_values, input_headers, "Clima")
 
     texture_value = get_first_available(
@@ -555,7 +546,6 @@ def build_excel_from_template(
     )
 
     codigo = get(person_row_values, input_headers, "CODIGO")
-
     dep = get(person_row_values, input_headers, "DEP")
     prov = get(person_row_values, input_headers, "PROV")
     dist = get(person_row_values, input_headers, "DIST")
@@ -591,7 +581,6 @@ def build_excel_from_template(
 
     if TARGET_SHEET not in target_wb.sheetnames:
         print("Available sheets:")
-
         for sheet in target_wb.sheetnames:
             print(repr(sheet))
 
@@ -633,34 +622,28 @@ def build_excel_from_template(
 
         "Ca_Cmol/Kg": "Calcio (Ca) (*)cmol(+)/Kg",
         "Mg_Cmol/Kg": "Magnesio (Mg) (*) cmol(+)/Kg",
-        "Na_Cmol/Kg": "Sodio (Na) (*)cmol(+)/Kg",
+        "Na_Cmol/Kg": "Sodio (Na) (*) cmol(+)/Kg",
         "K_Cmol/Kg": "Potasio (K) (*) cmol(+)/Kg",
 
         "Calcio Intercambiable": "Calcio (Ca) (*)cmol(+)/Kg",
         "Magnesio Intercambiable": "Magnesio (Mg) (*) cmol(+)/Kg",
-        "Sodio Intercambiable": "Sodio (Na) (*)cmol(+)/Kg",
+        "Sodio Intercambiable": "Sodio (Na) (*) cmol(+)/Kg",
         "Potasio Intercambiable": "Potasio (K) (*) cmol(+)/Kg",
 
         "Carbonato de Calcio Equivalente": "CaCO3 _% Equivalente",
-
         "Materia Orgánica (AS-07 Método de Walkley y Black)": "MO_%",
         "Materia Organica (AS-07 Walkley y Black)": "MO_%",
         "Materia Orgánica por LECO": "MO_%",
-
         "Conductividad Electrica (Suelo)": "CE_mS/m",
         "pH. (Suelo)": "pH",
-
         "Fósforo Disponible (Bray y Kurtz)": "P_mg/kg)",
         "Fósforo Disponible Bray mpaes": "P_mg/kg)",
-
         "Potasio Disponible (MPAES)": "K_ppm",
         "Potasio Disponible (AA)": "K_ppm",
-
         "Arena": "Arena",
         "Arcilla": "Arcilla",
         "Limo": "Limo",
         "Clase Textural": "Clase Textural",
-
         "Nitrógeno Total": "N_%",
         "Nitrógeno Total Kjeldahl": "N_%",
     }
@@ -760,16 +743,19 @@ def build_excel_from_template(
 
     # ------------------------------------------------------------
     # 6.2 Phosphorus method:
-    #     AL3 = Fósforo Disponible Olsen
-    #     AM3 = Fósforo Disponible Bray y Kurtz
+    #
+    # AL3 = Fósforo Disponible Olsen
+    # AM3 = Fósforo Disponible Bray y Kurtz
     # ------------------------------------------------------------
     target_ws["AL3"] = 0
     target_ws["AM3"] = 0
 
     if p_number is None:
         print("P_mg/kg) not found or invalid. AL3 and AM3 set to 0.")
+
     elif ph_number is None:
         print("pH not found or invalid. Cannot choose Olsen/Bray. AL3 and AM3 set to 0.")
+
     elif ph_number < 6.5:
         target_ws["AM3"] = p_number
 
@@ -777,6 +763,7 @@ def build_excel_from_template(
         print("Using Bray because pH < 6.5")
         print("AL3 / Fósforo Disponible Olsen: 0")
         print(f"AM3 / Fósforo Disponible Bray y Kurtz: {p_number}")
+
     else:
         target_ws["AL3"] = p_number
 
