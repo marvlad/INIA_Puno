@@ -71,8 +71,6 @@ def read_fertilizer_names_and_doses_from_csv(csv_file):
             continue
 
         # Only write fertilizers that were really selected.
-        # If you want to write all fertilizers, including zeros,
-        # remove this condition.
         if dose > 0:
             fertilizer_data.append((fertilizer_name, dose))
 
@@ -192,11 +190,18 @@ def write_vector_to_excel(
     output_excel,
     sheet_name="Nec_fert",
     start_row=53,
+    end_row=59,
     name_column="B",
     dose_column="C",
 ):
     """
     Writes optimized fertilizer names and doses into Excel.
+
+    The Excel fertilizer table in Nec_fert has rows:
+
+        B53:C59
+
+    Therefore this function only clears and writes rows 53 to 59.
 
     Default output:
 
@@ -206,10 +211,13 @@ def write_vector_to_excel(
         Nec_fert!B54 = fertilizer name 2
         Nec_fert!C54 = fertilizer dose 2
 
-        Nec_fert!B55 = fertilizer name 3
-        Nec_fert!C55 = fertilizer dose 3
-
         ...
+
+        Nec_fert!B59 = fertilizer name 7
+        Nec_fert!C59 = fertilizer dose 7
+
+    The optimizer should normally return maximum 5 fertilizers, so rows 53 to 59
+    are enough.
     """
 
     excel_file = Path(excel_file)
@@ -222,7 +230,22 @@ def write_vector_to_excel(
     if not csv_file.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_file}")
 
+    if end_row < start_row:
+        raise ValueError(
+            f"end_row must be >= start_row. Got start_row={start_row}, end_row={end_row}"
+        )
+
     fertilizer_data = read_fertilizer_names_and_doses_from_csv(csv_file)
+
+    available_rows = end_row - start_row + 1
+
+    if len(fertilizer_data) > available_rows:
+        raise ValueError(
+            f"Too many fertilizers to write.\n"
+            f"Excel has {available_rows} rows from {start_row} to {end_row}, "
+            f"but optimizer returned {len(fertilizer_data)} fertilizers.\n"
+            f"Fertilizers returned: {[name for name, _ in fertilizer_data]}"
+        )
 
     output_excel.parent.mkdir(parents=True, exist_ok=True)
 
@@ -236,14 +259,23 @@ def write_vector_to_excel(
 
     ws = wb[sheet_name]
 
-    # Clean old fertilizer names and doses.
-    # This avoids old rows remaining when the new result has fewer fertilizers.
-    for row in range(start_row, start_row + 30):
+    # ------------------------------------------------------------
+    # Clean only the real fertilizer input table.
+    #
+    # IMPORTANT:
+    # Do NOT clear start_row + 30.
+    # In this template, rows below 59 contain merged/formatted cells.
+    # Writing into those cells can produce:
+    #
+    # AttributeError: 'MergedCell' object attribute 'value' is read-only
+    # ------------------------------------------------------------
+    for row in range(start_row, end_row + 1):
         ws[f"{name_column}{row}"] = None
         ws[f"{dose_column}{row}"] = None
 
-    # Fill B53, B54, B55, B56, B57, ...
-    # Fill C53, C54, C55, C56, C57, ...
+    # ------------------------------------------------------------
+    # Fill B53:B59 and C53:C59
+    # ------------------------------------------------------------
     for i, (fertilizer_name, dose) in enumerate(fertilizer_data):
         row = start_row + i
 
@@ -259,6 +291,8 @@ def write_vector_to_excel(
     print(f"  Sheet: {sheet_name}")
     print(f"  First name cell: {name_column}{start_row}")
     print(f"  First dose cell: {dose_column}{start_row}")
+    print(f"  Last row used by writer: {end_row}")
+    print(f"  Available rows: {available_rows}")
     print(f"  Number of fertilizers written: {len(fertilizer_data)}")
 
     for i, (fertilizer_name, dose) in enumerate(fertilizer_data):
