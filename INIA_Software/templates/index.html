@@ -13,7 +13,7 @@
         }
 
         .container {
-            max-width: 850px;
+            max-width: 950px;
             margin: auto;
             background: white;
             padding: 30px;
@@ -40,6 +40,30 @@
             border: 1px solid #cbd5e1;
             border-radius: 8px;
             font-size: 14px;
+            box-sizing: border-box;
+        }
+
+        .row-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .row-input input {
+            flex: 1;
+        }
+
+        .browse-btn {
+            width: 110px;
+            margin-top: 6px;
+            background: #2563eb;
+            padding: 10px 14px;
+            font-size: 14px;
+            border-radius: 8px;
+        }
+
+        .browse-btn:hover {
+            background: #1d4ed8;
         }
 
         button {
@@ -58,6 +82,15 @@
             background: #14532d;
         }
 
+        .stop-btn {
+            background: #b91c1c;
+            margin-left: 10px;
+        }
+
+        .stop-btn:hover {
+            background: #991b1b;
+        }
+
         .hint {
             color: #6b7280;
             font-size: 13px;
@@ -69,14 +102,45 @@
             padding-top: 18px;
             border-top: 1px solid #e5e7eb;
         }
+
+        #terminal {
+            background: #111827;
+            color: #d1d5db;
+            padding: 16px;
+            border-radius: 10px;
+            min-height: 280px;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-family: Consolas, monospace;
+            font-size: 13px;
+            margin-top: 12px;
+        }
+
+        .status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #374151;
+        }
+
+        .button-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .disabled {
+            opacity: 0.6;
+            pointer-events: none;
+        }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h1>Generador de Reportes </h1>
+        <h1>Generador de Reportes</h1>
 
-        <form action="/generate" method="post">
+        <form id="generate-form">
 
             <label>Nombre del agricultor / productor</label>
             <input
@@ -97,54 +161,210 @@
                 <h3>Archivos de entrada</h3>
 
                 <label>RESULTADOS Excel</label>
-                <input
-                    type="text"
-                    name="resultados_excel"
-                    value="{{ resultados_excel }}"
-                    required
-                >
-                <div class="hint">Archivo con CODIGO, nombre, pH, P, K, etc.</div>
+                <div class="row-input">
+                    <input
+                        type="text"
+                        id="resultados_excel"
+                        name="resultados_excel"
+                        value="{{ resultados_excel }}"
+                        required
+                    >
+                    <button type="button" class="browse-btn"
+                            onclick="browseFile('resultados_excel')">
+                        Buscar
+                    </button>
+                </div>
+                <div class="hint">
+                    Archivo con CODIGO, nombre, pH, P, K, etc.
+                    Si no seleccionas otro archivo, se usa el valor por defecto.
+                </div>
 
                 <label>Template Excel</label>
-                <input
-                    type="text"
-                    name="template_excel"
-                    value="{{ template_excel }}"
-                    required
-                >
-                <div class="hint">Archivo base: Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx</div>
+                <div class="row-input">
+                    <input
+                        type="text"
+                        id="template_excel"
+                        name="template_excel"
+                        value="{{ template_excel }}"
+                        required
+                    >
+                    <button type="button" class="browse-btn"
+                            onclick="browseFile('template_excel')">
+                        Buscar
+                    </button>
+                </div>
+                <div class="hint">
+                    Archivo base: Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx.
+                    Si no seleccionas otro archivo, se usa el valor por defecto.
+                </div>
 
                 <label>Script report_pdf.py</label>
-                <input
-                    type="text"
-                    name="report_script"
-                    value="{{ report_script }}"
-                    required
-                >
+                <div class="row-input">
+                    <input
+                        type="text"
+                        id="report_script"
+                        name="report_script"
+                        value="{{ report_script }}"
+                        required
+                    >
+                    <button type="button" class="browse-btn"
+                            onclick="browseFile('report_script')">
+                        Buscar
+                    </button>
+                </div>
             </div>
 
             <div class="section">
                 <h3>Carpetas</h3>
 
                 <label>Carpeta central de reportes</label>
-                <input
-                    type="text"
-                    name="report_root"
-                    value="{{ report_root }}"
-                    required
-                >
+                <div class="row-input">
+                    <input
+                        type="text"
+                        id="report_root"
+                        name="report_root"
+                        value="{{ report_root }}"
+                        required
+                    >
+                    <button type="button" class="browse-btn"
+                            onclick="browseFolder('report_root')">
+                        Buscar
+                    </button>
+                </div>
 
                 <label>Carpeta de PDFs originales SU</label>
-                <input
-                    type="text"
-                    name="pdf_folder"
-                    value="{{ pdf_folder }}"
-                    required
-                >
+                <div class="row-input">
+                    <input
+                        type="text"
+                        id="pdf_folder"
+                        name="pdf_folder"
+                        value="{{ pdf_folder }}"
+                        required
+                    >
+                    <button type="button" class="browse-btn"
+                            onclick="browseFolder('pdf_folder')">
+                        Buscar
+                    </button>
+                </div>
             </div>
 
-            <button type="submit">Generar reporte</button>
+            <div class="button-row">
+                <button id="generate-btn" type="submit">
+                    Generar reporte
+                </button>
+
+                <button id="stop-btn" type="button" class="stop-btn" onclick="stopProcess()">
+                    Detener
+                </button>
+            </div>
         </form>
+
+        <div class="section">
+            <h3>Registro en vivo</h3>
+            <div class="status" id="status">Esperando...</div>
+            <div id="terminal"></div>
+        </div>
     </div>
+
+    <script>
+        let eventSource = null;
+
+        async function browseFile(inputId) {
+            const response = await fetch("/browse-file");
+            const data = await response.json();
+
+            if (data.path) {
+                document.getElementById(inputId).value = data.path;
+            }
+        }
+
+        async function browseFolder(inputId) {
+            const response = await fetch("/browse-folder");
+            const data = await response.json();
+
+            if (data.path) {
+                document.getElementById(inputId).value = data.path;
+            }
+        }
+
+        function appendTerminal(text) {
+            const terminal = document.getElementById("terminal");
+            terminal.textContent += text;
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        function startStream() {
+            if (eventSource !== null) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource("/stream");
+
+            eventSource.onmessage = function(event) {
+                appendTerminal(event.data + "\n");
+
+                if (event.data.includes("[PROCESS_FINISHED]")) {
+                    document.getElementById("status").textContent = "Proceso terminado.";
+                    document.getElementById("generate-btn").classList.remove("disabled");
+                    eventSource.close();
+                    eventSource = null;
+                }
+
+                if (event.data.includes("[PROCESS_STOPPED]")) {
+                    document.getElementById("status").textContent = "Proceso detenido.";
+                    document.getElementById("generate-btn").classList.remove("disabled");
+                    eventSource.close();
+                    eventSource = null;
+                }
+            };
+
+            eventSource.onerror = function() {
+                document.getElementById("status").textContent = "Conexión del registro cerrada.";
+            };
+        }
+
+        document.getElementById("generate-form").addEventListener("submit", async function(event) {
+            event.preventDefault();
+
+            const terminal = document.getElementById("terminal");
+            terminal.textContent = "";
+
+            document.getElementById("status").textContent = "Ejecutando...";
+            document.getElementById("generate-btn").classList.add("disabled");
+
+            const formData = new FormData(event.target);
+
+            const response = await fetch("/generate", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (!data.ok) {
+                document.getElementById("status").textContent = "Error al iniciar.";
+                appendTerminal(data.error + "\n");
+                document.getElementById("generate-btn").classList.remove("disabled");
+                return;
+            }
+
+            startStream();
+        });
+
+        async function stopProcess() {
+            const response = await fetch("/stop", {
+                method: "POST"
+            });
+
+            const data = await response.json();
+
+            if (data.ok) {
+                appendTerminal("\n[STOP REQUESTED]\n");
+                document.getElementById("status").textContent = "Deteniendo...";
+            } else {
+                appendTerminal("\n" + data.error + "\n");
+            }
+        }
+    </script>
 </body>
 </html>
