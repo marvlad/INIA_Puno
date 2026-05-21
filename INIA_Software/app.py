@@ -2,6 +2,8 @@
 
 from flask import Flask, render_template, request, jsonify, Response
 from pathlib import Path
+from werkzeug.utils import secure_filename
+
 import subprocess
 import threading
 import queue
@@ -12,6 +14,7 @@ import signal
 
 app = Flask(__name__)
 
+
 # ------------------------------------------------------------
 # Defaults
 # ------------------------------------------------------------
@@ -20,6 +23,9 @@ DEFAULT_TEMPLATE_EXCEL = "Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xls
 DEFAULT_REPORT_SCRIPT = "report_pdf.py"
 DEFAULT_REPORT_ROOT = "reports"
 DEFAULT_PDF_FOLDER = "pdfs"
+
+UPLOAD_DIR = Path("uploaded_inputs")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 CULTIVOS = [
     "PAPA NATIVA",
@@ -39,6 +45,45 @@ CULTIVOS = [
 process = None
 output_queue = queue.Queue()
 process_lock = threading.Lock()
+
+
+def clear_output_queue():
+    """
+    Clear old terminal output before starting a new process.
+    """
+
+    while not output_queue.empty():
+        try:
+            output_queue.get_nowait()
+        except queue.Empty:
+            break
+
+
+def save_uploaded_file(file_storage, default_path):
+    """
+    Save uploaded file if the user selected one.
+
+    If the user did not select a file, return the default path.
+    """
+
+    if file_storage is None:
+        return default_path
+
+    if file_storage.filename is None:
+        return default_path
+
+    if file_storage.filename.strip() == "":
+        return default_path
+
+    filename = secure_filename(file_storage.filename)
+
+    if filename == "":
+        return default_path
+
+    saved_path = UPLOAD_DIR / filename
+    file_storage.save(saved_path)
+
+    return str(saved_path.resolve())
 
 
 def enqueue_output(proc):
@@ -74,74 +119,14 @@ def index():
     )
 
 
-@app.route("/browse-file")
-def browse_file():
-    """
-    Open native file dialog.
-
-    This works because the app is running locally on localhost.
-    """
-
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-
-        path = filedialog.askopenfilename(
-            title="Seleccionar archivo",
-            filetypes=[
-                ("Excel files", "*.xlsx *.xlsm *.xls"),
-                ("Python files", "*.py"),
-                ("All files", "*.*"),
-            ],
-        )
-
-        root.destroy()
-
-        return jsonify({"path": path})
-
-    except Exception as e:
-        return jsonify({"path": "", "error": str(e)})
-
-
-@app.route("/browse-folder")
-def browse_folder():
-    """
-    Open native folder dialog.
-
-    This works because the app is running locally on localhost.
-    """
-
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-
-        path = filedialog.askdirectory(
-            title="Seleccionar carpeta"
-        )
-
-        root.destroy()
-
-        return jsonify({"path": path})
-
-    except Exception as e:
-        return jsonify({"path": "", "error": str(e)})
-
-
 @app.route("/generate", methods=["POST"])
 def generate():
     """
     Start report generation.
 
-    The process is launched in background.
-    The live output is read by /stream.
+    Uploaded files are optional:
+        - If uploaded, use uploaded file.
+        - If not uploaded, use default file.
     """
 
     global process
@@ -150,33 +135,42 @@ def generate():
         if process is not None and process.poll() is None:
             return jsonify({
                 "ok": False,
-                "error": "Ya hay un proceso ejecutándose. Deténlo antes de iniciar otro."
+                "error": "Ya hay un proceso ejecutándose. Deténlo antes de iniciar otro.",
             })
 
-        # Clear previous terminal output
-        while not output_queue.empty():
-            try:
-                output_queue.get_nowait()
-            except queue.Empty:
-                break
+        clear_output_queue()
 
         name = request.form.get("name", "").strip()
         cultivo = request.form.get("cultivo", "").strip()
 
-        resultados_excel = request.form.get(
-            "resultados_excel",
+        if not name:
+            return jsonify({"ok": False, "error": "El nombre es obligatorio."})
+
+        if not cultivo:
+            return jsonify({"ok": False, "error": "El cultivo es obligatorio."})
+
+        # ------------------------------------------------------------
+        # Files from index.html
+        #
+        # These names must match:
+        #   resultados_excel_file
+        #   template_excel_file
+        #   report_script_file
+        # ------------------------------------------------------------
+        resultados_excel = save_uploaded_file(
+            request.files.get("resultados_excel_file"),
             DEFAULT_RESULTADOS_EXCEL,
-        ).strip() or DEFAULT_RESULTADOS_EXCEL
+        )
 
-        template_excel = request.form.get(
-            "template_excel",
+        template_excel = save_uploaded_file(
+            request.files.get("template_excel_file"),
             DEFAULT_TEMPLATE_EXCEL,
-        ).strip() or DEFAULT_TEMPLATE_EXCEL
+        )
 
-        report_script = request.form.get(
-            "report_script",
+        report_script = save_uploaded_file(
+            request.files.get("report_script_file"),
             DEFAULT_REPORT_SCRIPT,
-        ).strip() or DEFAULT_REPORT_SCRIPT
+        )
 
         report_root = request.form.get(
             "report_root",
@@ -187,12 +181,6 @@ def generate():
             "pdf_folder",
             DEFAULT_PDF_FOLDER,
         ).strip() or DEFAULT_PDF_FOLDER
-
-        if not name:
-            return jsonify({"ok": False, "error": "El nombre es obligatorio."})
-
-        if not cultivo:
-            return jsonify({"ok": False, "error": "El cultivo es obligatorio."})
 
         cmd = [
             sys.executable,
@@ -217,16 +205,34 @@ def generate():
         output_queue.put("Ejecutando comando:")
         output_queue.put(" ".join(f'"{x}"' if " " in x else x for x in cmd))
         output_queue.put("")
+        output_queue.put(f"Base de Datos Excel: {resultados_excel}")
+        output_queue.put(f"Plantilla de Excel: {template_excel}")
+        output_queue.put(f"Script de reporte: {report_script}")
+        output_queue.put(f"Carpeta de reportes: {report_root}")
+        output_queue.put(f"Carpeta PDFs SU: {pdf_folder}")
+        output_queue.put("")
 
         try:
+            popen_kwargs = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "bufsize": 1,
+                "universal_newlines": True,
+                "cwd": Path(__file__).resolve().parent,
+            }
+
+            # On Linux/macOS, create a new process group so /stop can kill child processes too.
+            if os.name != "nt":
+                popen_kwargs["preexec_fn"] = os.setsid
+
+            # On Windows, allow process group termination when possible.
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-                cwd=Path(__file__).resolve().parent,
+                **popen_kwargs,
             )
 
             thread = threading.Thread(
@@ -253,6 +259,10 @@ def stream():
         while True:
             try:
                 line = output_queue.get(timeout=0.5)
+
+                # Avoid breaking SSE if a line contains newlines.
+                line = str(line).replace("\r", "").replace("\n", " ")
+
                 yield f"data: {line}\n\n"
 
                 if (
@@ -263,11 +273,16 @@ def stream():
                     break
 
             except queue.Empty:
+                # Keep connection alive.
                 yield "data: \n\n"
 
     return Response(
         generate_events(),
         mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -283,14 +298,22 @@ def stop():
         if process is None or process.poll() is not None:
             return jsonify({
                 "ok": False,
-                "error": "No hay un proceso activo para detener."
+                "error": "No hay un proceso activo para detener.",
             })
 
         try:
             if os.name == "nt":
-                process.terminate()
+                # First try CTRL_BREAK_EVENT for process group.
+                try:
+                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                except Exception:
+                    process.terminate()
             else:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                # Kill whole process group.
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                except Exception:
+                    process.terminate()
 
             output_queue.put("[PROCESS_STOPPED]")
             return jsonify({"ok": True})
@@ -303,6 +326,6 @@ if __name__ == "__main__":
     app.run(
         host="127.0.0.1",
         port=5000,
-        debug=True,
+        debug=False,
         threaded=True,
     )
