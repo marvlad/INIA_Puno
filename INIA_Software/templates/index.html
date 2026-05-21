@@ -48,11 +48,6 @@
             box-sizing: border-box;
         }
 
-        input[type="file"] {
-            background: #f9fafb;
-            cursor: pointer;
-        }
-
         button {
             margin-top: 28px;
             background: #166534;
@@ -173,7 +168,7 @@
     <div class="container">
         <h1>Generador de Reportes</h1>
 
-        <form id="generate-form" enctype="multipart/form-data">
+        <form id="generate-form">
 
             <label>Nombre del agricultor / productor</label>
             <input
@@ -194,16 +189,27 @@
                 <h3>Archivos de entrada</h3>
 
                 <div class="file-note">
-                    Puedes seleccionar archivos con el botón del navegador.
-                    Si no seleccionas ningún archivo, el sistema usará los archivos por defecto.
+                    Usa los botones para seleccionar archivos o carpetas. Si no cambias nada,
+                    el sistema usará los valores por defecto.
                 </div>
 
                 <label>Base de Datos Excel</label>
-                <input
-                    type="file"
-                    name="resultados_excel_file"
-                    accept=".xlsx,.xlsm,.xls"
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="resultados_excel"
+                        name="resultados_excel"
+                        value="{{ resultados_excel }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFile('resultados_excel')"
+                    >
+                        Seleccionar archivo
+                    </button>
+                </div>
                 <div class="hint">
                     Archivo con CÓDIGO, nombre, pH, P, K, Ca, Mg, etc.
                 </div>
@@ -212,11 +218,22 @@
                 </div>
 
                 <label>Plantilla de Excel</label>
-                <input
-                    type="file"
-                    name="template_excel_file"
-                    accept=".xlsx,.xlsm,.xls"
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="template_excel"
+                        name="template_excel"
+                        value="{{ template_excel }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFile('template_excel')"
+                    >
+                        Seleccionar archivo
+                    </button>
+                </div>
                 <div class="hint">
                     Archivo base de la plantilla de recomendación.
                 </div>
@@ -225,11 +242,22 @@
                 </div>
 
                 <label>Script report_pdf.py</label>
-                <input
-                    type="file"
-                    name="report_script_file"
-                    accept=".py"
-                >
+                <div class="path-row">
+                    <input
+                        type="text"
+                        id="report_script"
+                        name="report_script"
+                        value="{{ report_script }}"
+                        required
+                    >
+                    <button
+                        type="button"
+                        class="small-btn"
+                        onclick="selectFile('report_script')"
+                    >
+                        Seleccionar archivo
+                    </button>
+                </div>
                 <div class="hint">
                     Selecciona un script solo si quieres cambiar el script por defecto.
                 </div>
@@ -331,6 +359,21 @@
             if (eventSource !== null) {
                 eventSource.close();
                 eventSource = null;
+            }
+        }
+
+        async function selectFile(inputId) {
+            try {
+                const response = await fetch("/browse-file");
+                const data = await response.json();
+
+                if (data.path) {
+                    document.getElementById(inputId).value = data.path;
+                } else if (data.error) {
+                    appendTerminal("\nError seleccionando archivo: " + data.error + "\n");
+                }
+            } catch (error) {
+                appendTerminal("\nError seleccionando archivo: " + String(error) + "\n");
             }
         }
 
