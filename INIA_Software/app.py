@@ -1,142 +1,308 @@
 # app.py
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify, Response
 from pathlib import Path
 import subprocess
+import threading
+import queue
 import sys
 import os
+import signal
 
-from products import ALLOWED_PRODUCTS
 
 app = Flask(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
+# ------------------------------------------------------------
+# Defaults
+# ------------------------------------------------------------
+DEFAULT_RESULTADOS_EXCEL = "RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx"
+DEFAULT_TEMPLATE_EXCEL = "Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx"
+DEFAULT_REPORT_SCRIPT = "report_pdf.py"
+DEFAULT_REPORT_ROOT = "reports"
+DEFAULT_PDF_FOLDER = "pdfs"
 
-DEFAULT_RESULTADOS_EXCEL = BASE_DIR / "RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx"
-DEFAULT_TEMPLATE_EXCEL = BASE_DIR / "Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx"
-DEFAULT_REPORT_SCRIPT = BASE_DIR / "report_pdf.py"
+CULTIVOS = [
+    "PAPA NATIVA",
+    "PAPA MEJORADA",
+    "QUINUA",
+    "CAÑIHUA",
+    "AVENA",
+    "CEBADA",
+    "HABA",
+    "TRIGO",
+]
 
-DEFAULT_REPORT_ROOT = r"G:\Mi unidad\REPORTES_GENERADOS"
-DEFAULT_PDF_FOLDER = r"G:\Mi unidad\LABSAF ILLPA\CAMPAÑA PERU 2M- LABSAF ILLPA\INFORMES DE ENSAYO"
 
-@app.route("/", methods=["GET"])
+# ------------------------------------------------------------
+# Process state
+# ------------------------------------------------------------
+process = None
+output_queue = queue.Queue()
+process_lock = threading.Lock()
+
+
+def enqueue_output(proc):
+    """
+    Read subprocess output line by line and send it to the queue.
+    """
+
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            if line:
+                output_queue.put(line.rstrip())
+    except Exception as e:
+        output_queue.put(f"[ERROR READING PROCESS OUTPUT] {e}")
+
+    return_code = proc.wait()
+
+    if return_code == 0:
+        output_queue.put("[PROCESS_FINISHED]")
+    else:
+        output_queue.put(f"[PROCESS_FINISHED_WITH_ERROR] return code = {return_code}")
+
+
+@app.route("/")
 def index():
     return render_template(
         "index.html",
-        cultivos=ALLOWED_PRODUCTS,
-        resultados_excel=str(DEFAULT_RESULTADOS_EXCEL),
-        template_excel=str(DEFAULT_TEMPLATE_EXCEL),
+        cultivos=CULTIVOS,
+        resultados_excel=DEFAULT_RESULTADOS_EXCEL,
+        template_excel=DEFAULT_TEMPLATE_EXCEL,
+        report_script=DEFAULT_REPORT_SCRIPT,
         report_root=DEFAULT_REPORT_ROOT,
         pdf_folder=DEFAULT_PDF_FOLDER,
-        report_script=str(DEFAULT_REPORT_SCRIPT),
     )
+
+
+@app.route("/browse-file")
+def browse_file():
+    """
+    Open native file dialog.
+
+    This works because the app is running locally on localhost.
+    """
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        path = filedialog.askopenfilename(
+            title="Seleccionar archivo",
+            filetypes=[
+                ("Excel files", "*.xlsx *.xlsm *.xls"),
+                ("Python files", "*.py"),
+                ("All files", "*.*"),
+            ],
+        )
+
+        root.destroy()
+
+        return jsonify({"path": path})
+
+    except Exception as e:
+        return jsonify({"path": "", "error": str(e)})
+
+
+@app.route("/browse-folder")
+def browse_folder():
+    """
+    Open native folder dialog.
+
+    This works because the app is running locally on localhost.
+    """
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        path = filedialog.askdirectory(
+            title="Seleccionar carpeta"
+        )
+
+        root.destroy()
+
+        return jsonify({"path": path})
+
+    except Exception as e:
+        return jsonify({"path": "", "error": str(e)})
 
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    name = request.form.get("name", "").strip()
-    cultivo = request.form.get("cultivo", "").strip()
+    """
+    Start report generation.
 
-    resultados_excel = request.form.get("resultados_excel", "").strip()
-    template_excel = request.form.get("template_excel", "").strip()
-    report_root = request.form.get("report_root", "").strip()
-    pdf_folder = request.form.get("pdf_folder", "").strip()
-    report_script = request.form.get("report_script", "").strip()
+    The process is launched in background.
+    The live output is read by /stream.
+    """
 
-    if not name:
-        return render_template(
-            "result.html",
-            success=False,
-            message="Missing name.",
-            stdout="",
-            stderr="",
-        )
+    global process
 
-    if not cultivo:
-        return render_template(
-            "result.html",
-            success=False,
-            message="Missing cultivo.",
-            stdout="",
-            stderr="",
-        )
+    with process_lock:
+        if process is not None and process.poll() is None:
+            return jsonify({
+                "ok": False,
+                "error": "Ya hay un proceso ejecutándose. Deténlo antes de iniciar otro."
+            })
 
-    cmd = [
-        sys.executable,
-        str(BASE_DIR / "main.py"),
-        "--resultados-excel",
-        resultados_excel,
-        "--template-excel",
-        template_excel,
-        "--name",
-        name,
-        "--cultivo",
-        cultivo,
-        "--report-root",
-        report_root,
-        "--pdf-folder",
-        pdf_folder,
-        "--report-script",
-        report_script,
-    ]
+        # Clear previous terminal output
+        while not output_queue.empty():
+            try:
+                output_queue.get_nowait()
+            except queue.Empty:
+                break
 
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(BASE_DIR),
-            text=True,
-            capture_output=True,
-            timeout=600,
-        )
+        name = request.form.get("name", "").strip()
+        cultivo = request.form.get("cultivo", "").strip()
 
-        success = result.returncode == 0
+        resultados_excel = request.form.get(
+            "resultados_excel",
+            DEFAULT_RESULTADOS_EXCEL,
+        ).strip() or DEFAULT_RESULTADOS_EXCEL
 
-        if success:
-            message = "Report generated successfully."
-        else:
-            message = "Report generation failed."
+        template_excel = request.form.get(
+            "template_excel",
+            DEFAULT_TEMPLATE_EXCEL,
+        ).strip() or DEFAULT_TEMPLATE_EXCEL
 
-        return render_template(
-            "result.html",
-            success=success,
-            message=message,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            command=" ".join(f'"{x}"' if " " in x else x for x in cmd),
-        )
+        report_script = request.form.get(
+            "report_script",
+            DEFAULT_REPORT_SCRIPT,
+        ).strip() or DEFAULT_REPORT_SCRIPT
 
-    except subprocess.TimeoutExpired as e:
-        return render_template(
-            "result.html",
-            success=False,
-            message="The process took too long and timed out.",
-            stdout=e.stdout or "",
-            stderr=e.stderr or "",
-            command=" ".join(cmd),
-        )
+        report_root = request.form.get(
+            "report_root",
+            DEFAULT_REPORT_ROOT,
+        ).strip() or DEFAULT_REPORT_ROOT
 
-    except Exception as e:
-        return render_template(
-            "result.html",
-            success=False,
-            message=f"Unexpected error: {e}",
-            stdout="",
-            stderr="",
-            command=" ".join(cmd),
-        )
+        pdf_folder = request.form.get(
+            "pdf_folder",
+            DEFAULT_PDF_FOLDER,
+        ).strip() or DEFAULT_PDF_FOLDER
+
+        if not name:
+            return jsonify({"ok": False, "error": "El nombre es obligatorio."})
+
+        if not cultivo:
+            return jsonify({"ok": False, "error": "El cultivo es obligatorio."})
+
+        cmd = [
+            sys.executable,
+            "-u",
+            "main.py",
+            "--resultados-excel",
+            resultados_excel,
+            "--template-excel",
+            template_excel,
+            "--name",
+            name,
+            "--cultivo",
+            cultivo,
+            "--report-root",
+            report_root,
+            "--pdf-folder",
+            pdf_folder,
+            "--report-script",
+            report_script,
+        ]
+
+        output_queue.put("Ejecutando comando:")
+        output_queue.put(" ".join(f'"{x}"' if " " in x else x for x in cmd))
+        output_queue.put("")
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                cwd=Path(__file__).resolve().parent,
+            )
+
+            thread = threading.Thread(
+                target=enqueue_output,
+                args=(process,),
+                daemon=True,
+            )
+            thread.start()
+
+            return jsonify({"ok": True})
+
+        except Exception as e:
+            process = None
+            return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/stream")
+def stream():
+    """
+    Server-Sent Events endpoint for live terminal output.
+    """
+
+    def generate_events():
+        while True:
+            try:
+                line = output_queue.get(timeout=0.5)
+                yield f"data: {line}\n\n"
+
+                if (
+                    "[PROCESS_FINISHED]" in line
+                    or "[PROCESS_FINISHED_WITH_ERROR]" in line
+                    or "[PROCESS_STOPPED]" in line
+                ):
+                    break
+
+            except queue.Empty:
+                yield "data: \n\n"
+
+    return Response(
+        generate_events(),
+        mimetype="text/event-stream",
+    )
+
+
+@app.route("/stop", methods=["POST"])
+def stop():
+    """
+    Stop currently running process.
+    """
+
+    global process
+
+    with process_lock:
+        if process is None or process.poll() is not None:
+            return jsonify({
+                "ok": False,
+                "error": "No hay un proceso activo para detener."
+            })
+
+        try:
+            if os.name == "nt":
+                process.terminate()
+            else:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+
+            output_queue.put("[PROCESS_STOPPED]")
+            return jsonify({"ok": True})
+
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)})
 
 
 if __name__ == "__main__":
-    '''
     app.run(
         host="127.0.0.1",
         port=5000,
         debug=True,
-    )
-    '''
-    from waitress import serve
-    serve(
-        app,
-        host="127.0.0.1",
-        port=5000,
+        threaded=True,
     )
