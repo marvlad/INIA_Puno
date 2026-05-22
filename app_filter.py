@@ -165,6 +165,31 @@ HTML = """
             margin-top: 12px;
             border: 1px solid #b7dfbd;
         }
+
+        .all-box {
+            background: #f0f7ff;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 18px;
+            border: 1px solid #9cc7ff;
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .checkbox-row input[type="checkbox"] {
+            width: auto;
+            transform: scale(1.2);
+        }
+
+        .checkbox-row label {
+            margin-top: 0;
+            font-weight: bold;
+        }
     </style>
 </head>
 
@@ -190,13 +215,27 @@ HTML = """
         <label>Archivo Excel</label>
         <input type="file" name="input_excel" accept=".xlsx,.xlsm,.xls" required>
 
+        <div class="all-box">
+            <div class="checkbox-row">
+                <input type="checkbox" id="export_all" name="export_all" value="1">
+                <label for="export_all">Exportar todos los nombres y cultivos</label>
+            </div>
+
+            <div class="small">
+                Si activa esta opción, no necesita escribir filtros.
+                Se generará un CSV con todos los valores de
+                <code>NOMBRES Y APELLIDOS</code> y <code>CULTIVO A INSTALAR</code>.
+            </div>
+        </div>
+
         <label>Filtros</label>
-        <textarea name="filters_text" required placeholder="DIST=AYAVIRI&#10;PROV=MELGAR&#10;CULTIVO A INSTALAR=ALFALFA"></textarea>
+        <textarea name="filters_text" placeholder="DIST=AYAVIRI&#10;PROV=MELGAR&#10;CULTIVO A INSTALAR=ALFALFA"></textarea>
 
         <div class="small">
             Escriba un filtro por línea usando <code>COLUMNA=VALOR</code>.
             También puede usar <code>:</code>, por ejemplo <code>DIST: AYAVIRI</code>.
             Si escribe varios filtros, la fila debe cumplir todos.
+            Si activa <b>Exportar todos los nombres y cultivos</b>, este campo será ignorado.
         </div>
 
         <label>Tipo de búsqueda</label>
@@ -218,7 +257,8 @@ HTML = """
 
         <div class="small">
             Si deja este campo vacío, el nombre del archivo se generará usando los filtros.
-            Por ejemplo: <code>DIST_AYAVIRI.csv</code>.
+            Si usa la opción de exportar todo, se usará:
+            <code>todos_los_nombres_y_cultivos.csv</code>.
         </div>
 
         <button type="submit">Generar CSV</button>
@@ -235,7 +275,11 @@ HTML = """
 
         <b>Ejemplo con búsqueda por contenido:</b><br>
         Seleccione <b>Contiene</b> y use:<br>
-        <code>NOMBRES Y APELLIDOS=MARIA</code>
+        <code>NOMBRES Y APELLIDOS=MARIA</code><br><br>
+
+        <b>Para exportar todo:</b><br>
+        Active <b>Exportar todos los nombres y cultivos</b> y presione
+        <b>Generar CSV</b>.
     </div>
 
     {% if error %}
@@ -247,16 +291,35 @@ HTML = """
             <b>CSV generado correctamente.</b><br>
             Hoja usada: {{ result.sheet_used }}<br>
             Fila de encabezados: {{ result.header_row }}<br>
-            Tipo de búsqueda: {{ result.match_mode }}<br>
-            Coincidencias encontradas: {{ result.matches_found }}<br>
+
+            {% if result.export_all %}
+                Modo: Exportar todo<br>
+                Filas exportadas: {{ result.rows_exported }}<br>
+            {% else %}
+                Tipo de búsqueda: {{ result.match_mode }}<br>
+
+                {% if result.matches_found is defined %}
+                    Coincidencias encontradas: {{ result.matches_found }}<br>
+                {% else %}
+                    Coincidencias encontradas: {{ result.rows_exported }}<br>
+                {% endif %}
+            {% endif %}
+
             Archivo: {{ result.output_csv }}<br>
 
-            <div class="filters-box">
-                <b>Filtros aplicados:</b><br>
-                {% for item in result.filters %}
-                    {{ item.column }} = {{ item.value }}<br>
-                {% endfor %}
-            </div>
+            {% if result.export_all %}
+                <div class="filters-box">
+                    <b>Filtros aplicados:</b><br>
+                    Ninguno. Se exportaron todos los nombres y cultivos.
+                </div>
+            {% else %}
+                <div class="filters-box">
+                    <b>Filtros aplicados:</b><br>
+                    {% for item in result.filters %}
+                        {{ item.column }} = {{ item.value }}<br>
+                    {% endfor %}
+                </div>
+            {% endif %}
 
             <a class="download" href="{{ download_url }}">Descargar CSV</a>
         </div>
@@ -332,17 +395,25 @@ def filter_excel():
                 download_url=None,
             )
 
+        export_all = request.form.get("export_all") == "1"
+
         filters_text = request.form.get("filters_text", "").strip()
 
-        if not filters_text:
-            return render_template_string(
-                HTML,
-                error="Debe ingresar al menos un filtro.",
-                result=None,
-                download_url=None,
-            )
+        if export_all:
+            filters = []
+        else:
+            if not filters_text:
+                return render_template_string(
+                    HTML,
+                    error=(
+                        "Debe ingresar al menos un filtro o activar "
+                        "'Exportar todos los nombres y cultivos'."
+                    ),
+                    result=None,
+                    download_url=None,
+                )
 
-        filters = parse_filters_from_text(filters_text)
+            filters = parse_filters_from_text(filters_text)
 
         sheet = request.form.get("sheet", "").strip()
         sheet = sheet if sheet else None
@@ -354,7 +425,10 @@ def filter_excel():
         if manual_output_name:
             output_name = safe_output_name(manual_output_name)
         else:
-            output_name = make_output_name_from_filters(filters)
+            if export_all:
+                output_name = "todos_los_nombres_y_cultivos.csv"
+            else:
+                output_name = make_output_name_from_filters(filters)
 
         run_id = str(uuid.uuid4())[:8]
 
@@ -365,7 +439,7 @@ def filter_excel():
         # Keep random ID only for uploaded Excel, to avoid conflicts.
         input_excel = UPLOAD_DIR / f"input_{run_id}{input_suffix}"
 
-        # Output CSV uses clean name based on filters.
+        # Output CSV uses clean name.
         # If the same name already exists, it appends _2, _3, etc.
         output_csv = unique_output_path(OUTPUT_DIR, output_name)
 
@@ -378,6 +452,7 @@ def filter_excel():
             output_dir=OUTPUT_DIR,
             sheet_name=sheet,
             match_mode=match_mode,
+            export_all=export_all,
         )
 
         return render_template_string(
