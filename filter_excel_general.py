@@ -93,20 +93,6 @@ def safe_filename_text(text):
 def make_output_name_from_filters(filters):
     """
     Create CSV filename from one or multiple filters.
-
-    Example:
-        DIST=AYAVIRI
-
-    Output:
-        DIST_AYAVIRI.csv
-
-    Example:
-        PROV=MELGAR
-        DIST=AYAVIRI
-        CULTIVO A INSTALAR=ALFALFA
-
-    Output:
-        PROV_MELGAR__DIST_AYAVIRI__CULTIVO_A_INSTALAR_ALFALFA.csv
     """
     parts = []
 
@@ -319,7 +305,7 @@ def validate_filter_columns(filters, headers_norm_to_col, headers_original):
 
 def validate_output_columns(headers_norm_to_col, headers_original):
     """
-    Checks that the two required output columns exist.
+    Checks that the required output columns exist.
     """
     missing = []
 
@@ -364,30 +350,39 @@ def row_matches_all_filters(ws, row, filters, headers_norm_to_col, match_mode="e
 
 def filter_excel_general(
     input_excel,
-    filters,
+    filters=None,
     output_csv=None,
     output_dir="outputs",
     sheet_name=None,
     match_mode="exact",
+    export_all=False,
 ):
     """
     Filter Excel rows by one or multiple filters.
 
-    The output CSV always contains only:
+    Output CSV always contains only:
         NOMBRES Y APELLIDOS
         CULTIVO A INSTALAR
+
+    If export_all=True, no filters are required and all valid rows are exported.
     """
     input_excel = Path(input_excel)
     output_dir = Path(output_dir)
 
+    if filters is None:
+        filters = []
+
     if not input_excel.exists():
         raise FileNotFoundError(f"Input Excel file not found: {input_excel}")
 
-    if not filters:
-        raise ValueError("At least one filter is required.")
+    if not export_all and not filters:
+        raise ValueError("At least one filter is required, unless using --all.")
 
     if output_csv is None or not str(output_csv).strip():
-        output_csv = output_dir / make_output_name_from_filters(filters)
+        if export_all:
+            output_csv = output_dir / "todos_los_nombres_y_cultivos.csv"
+        else:
+            output_csv = output_dir / make_output_name_from_filters(filters)
     else:
         output_csv = Path(output_csv)
 
@@ -398,20 +393,24 @@ def filter_excel_general(
     header_row = find_header_row(ws)
     headers_norm_to_col, headers_original = get_headers(ws, header_row)
 
-    validate_filter_columns(filters, headers_norm_to_col, headers_original)
+    if not export_all:
+        validate_filter_columns(filters, headers_norm_to_col, headers_original)
+
     validate_output_columns(headers_norm_to_col, headers_original)
 
     results = []
 
     for row in range(header_row + 1, ws.max_row + 1):
-        if not row_matches_all_filters(
-            ws=ws,
-            row=row,
-            filters=filters,
-            headers_norm_to_col=headers_norm_to_col,
-            match_mode=match_mode,
-        ):
-            continue
+
+        if not export_all:
+            if not row_matches_all_filters(
+                ws=ws,
+                row=row,
+                filters=filters,
+                headers_norm_to_col=headers_norm_to_col,
+                match_mode=match_mode,
+            ):
+                continue
 
         output_row = {}
 
@@ -440,11 +439,17 @@ def filter_excel_general(
     print(f"Input Excel: {input_excel}")
     print(f"Sheet used: {ws.title}")
     print(f"Header row: {header_row}")
-    print("Filters:")
-    for item in filters:
-        print(f"  {item['column']} = {item['value']}")
-    print(f"Match mode: {match_mode}")
-    print(f"Matches found: {len(results)}")
+
+    if export_all:
+        print("Mode: EXPORT ALL")
+        print("Filters: none")
+    else:
+        print("Filters:")
+        for item in filters:
+            print(f"  {item['column']} = {item['value']}")
+        print(f"Match mode: {match_mode}")
+
+    print(f"Rows exported: {len(results)}")
     print(f"Output CSV: {output_csv}")
 
     return {
@@ -453,7 +458,8 @@ def filter_excel_general(
         "header_row": header_row,
         "filters": filters,
         "match_mode": match_mode,
-        "matches_found": len(results),
+        "export_all": export_all,
+        "rows_exported": len(results),
         "output_csv": str(output_csv),
         "output_columns": DEFAULT_OUTPUT_COLUMNS,
     }
@@ -467,7 +473,8 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Filter Excel rows by one or multiple columns. "
-            "Output CSV always contains NOMBRES Y APELLIDOS and CULTIVO A INSTALAR."
+            "Output CSV always contains NOMBRES Y APELLIDOS and CULTIVO A INSTALAR. "
+            "Use --all to export all names and crops without filters."
         )
     )
 
@@ -480,7 +487,7 @@ def main():
     parser.add_argument(
         "--filter",
         action="append",
-        required=True,
+        default=[],
         help=(
             "Filter in COLUMN=VALUE format. "
             "Can be repeated. Example: "
@@ -489,11 +496,20 @@ def main():
     )
 
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Export all rows with NOMBRES Y APELLIDOS and CULTIVO A INSTALAR. "
+            "No filters are required when using this option."
+        ),
+    )
+
+    parser.add_argument(
         "--output-csv",
         default=None,
         help=(
             "Output CSV file. "
-            "If omitted, the filename is generated automatically from the filters."
+            "If omitted, the filename is generated automatically."
         ),
     )
 
@@ -518,8 +534,11 @@ def main():
 
     args = parser.parse_args()
 
-    filters_text = "\n".join(args.filter)
-    filters = parse_filters_from_text(filters_text)
+    if args.all:
+        filters = []
+    else:
+        filters_text = "\n".join(args.filter)
+        filters = parse_filters_from_text(filters_text)
 
     filter_excel_general(
         input_excel=args.input_excel,
@@ -528,6 +547,7 @@ def main():
         output_dir=args.output_dir,
         sheet_name=args.sheet,
         match_mode=args.match_mode,
+        export_all=args.all,
     )
 
 
