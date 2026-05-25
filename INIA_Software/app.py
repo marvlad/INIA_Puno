@@ -1,491 +1,406 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Generador de Reportes INIA Puno</title>
-
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f8;
-            margin: 0;
-            padding: 30px;
-        }
-
-        .container {
-            max-width: 950px;
-            margin: auto;
-            background: white;
-            padding: 30px;
-            border-radius: 14px;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.12);
-        }
-
-        h1 {
-            margin-top: 0;
-            color: #1f2937;
-        }
-
-        h3 {
-            color: #1f2937;
-            margin-bottom: 10px;
-        }
-
-        label {
-            display: block;
-            margin-top: 18px;
-            font-weight: bold;
-            color: #374151;
-        }
-
-        input, select {
-            width: 100%;
-            padding: 10px;
-            margin-top: 6px;
-            border: 1px solid #cbd5e1;
-            border-radius: 8px;
-            font-size: 14px;
-            box-sizing: border-box;
-        }
-
-        button {
-            margin-top: 28px;
-            background: #166534;
-            color: white;
-            border: none;
-            padding: 14px 24px;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
-        }
-
-        button:hover {
-            background: #14532d;
-        }
-
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .stop-btn {
-            background: #b91c1c;
-            margin-left: 10px;
-        }
-
-        .stop-btn:hover {
-            background: #991b1b;
-        }
-
-        .small-btn {
-            width: 185px;
-            margin-top: 6px;
-            background: #2563eb;
-            padding: 10px 14px;
-            font-size: 14px;
-            border-radius: 8px;
-        }
-
-        .small-btn:hover {
-            background: #1d4ed8;
-        }
-
-        .path-row {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .path-row input {
-            flex: 1;
-        }
-
-        .hint {
-            color: #6b7280;
-            font-size: 13px;
-            margin-top: 4px;
-            line-height: 1.4;
-        }
-
-        .default-path {
-            color: #374151;
-            font-size: 13px;
-            margin-top: 6px;
-            background: #f3f4f6;
-            padding: 8px;
-            border-radius: 6px;
-            word-break: break-all;
-            border: 1px solid #e5e7eb;
-        }
-
-        .section {
-            margin-top: 28px;
-            padding-top: 18px;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        #terminal {
-            background: #111827;
-            color: #d1d5db;
-            padding: 16px;
-            border-radius: 10px;
-            min-height: 280px;
-            max-height: 500px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            font-family: Consolas, monospace;
-            font-size: 13px;
-            margin-top: 12px;
-        }
-
-        .status {
-            margin-top: 10px;
-            font-weight: bold;
-            color: #374151;
-        }
-
-        .button-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .file-note {
-            margin-top: 8px;
-            padding: 10px;
-            background: #ecfdf5;
-            border: 1px solid #bbf7d0;
-            color: #166534;
-            border-radius: 8px;
-            font-size: 13px;
-        }
-    </style>
-</head>
-
-<body>
-    <div class="container">
-        <h1>Generador de Reportes</h1>
-
-        <form id="generate-form">
-
-            <label>Nombre del agricultor / productor</label>
-            <input
-                type="text"
-                name="name"
-                placeholder="Ejemplo: Huaman Huaman Arturo"
-                required
-            >
-
-            <label>Cultivo</label>
-            <select name="cultivo" required>
-                {% for cultivo in cultivos %}
-                    <option value="{{ cultivo }}">{{ cultivo }}</option>
-                {% endfor %}
-            </select>
-
-            <div class="section">
-                <h3>Archivos de entrada</h3>
-
-                <div class="file-note">
-                    Usa los botones para seleccionar archivos o carpetas. Si no cambias nada,
-                    el sistema usará los valores por defecto.
-                </div>
-
-                <label>Base de Datos Excel</label>
-                <div class="path-row">
-                    <input
-                        type="text"
-                        id="resultados_excel"
-                        name="resultados_excel"
-                        value="{{ resultados_excel }}"
-                        required
-                    >
-                    <button
-                        type="button"
-                        class="small-btn"
-                        onclick="selectFile('resultados_excel')"
-                    >
-                        Seleccionar archivo
-                    </button>
-                </div>
-                <div class="hint">
-                    Archivo con CÓDIGO, nombre, pH, P, K, Ca, Mg, etc.
-                </div>
-                <div class="default-path">
-                    Por defecto: {{ resultados_excel }}
-                </div>
-
-                <label>Plantilla de Excel</label>
-                <div class="path-row">
-                    <input
-                        type="text"
-                        id="template_excel"
-                        name="template_excel"
-                        value="{{ template_excel }}"
-                        required
-                    >
-                    <button
-                        type="button"
-                        class="small-btn"
-                        onclick="selectFile('template_excel')"
-                    >
-                        Seleccionar archivo
-                    </button>
-                </div>
-                <div class="hint">
-                    Archivo base de la plantilla de recomendación.
-                </div>
-                <div class="default-path">
-                    Por defecto: {{ template_excel }}
-                </div>
-
-                <label>Script report_pdf.py</label>
-                <div class="path-row">
-                    <input
-                        type="text"
-                        id="report_script"
-                        name="report_script"
-                        value="{{ report_script }}"
-                        required
-                    >
-                    <button
-                        type="button"
-                        class="small-btn"
-                        onclick="selectFile('report_script')"
-                    >
-                        Seleccionar archivo
-                    </button>
-                </div>
-                <div class="hint">
-                    Selecciona un script solo si quieres cambiar el script por defecto.
-                </div>
-                <div class="default-path">
-                    Por defecto: {{ report_script }}
-                </div>
-            </div>
-
-            <div class="section">
-                <h3>Carpetas</h3>
-
-                <label>Carpeta central de reportes</label>
-                <div class="path-row">
-                    <input
-                        type="text"
-                        id="report_root"
-                        name="report_root"
-                        value="{{ report_root }}"
-                        required
-                    >
-                    <button
-                        type="button"
-                        class="small-btn"
-                        onclick="selectFolder('report_root')"
-                    >
-                        Seleccionar carpeta
-                    </button>
-                </div>
-                <div class="hint">
-                    Ruta de la carpeta donde se guardarán los reportes generados.
-                </div>
-                <div class="default-path">
-                    Por defecto: {{ report_root }}
-                </div>
-
-                <label>Carpeta de PDFs originales SU</label>
-                <div class="path-row">
-                    <input
-                        type="text"
-                        id="pdf_folder"
-                        name="pdf_folder"
-                        value="{{ pdf_folder }}"
-                        required
-                    >
-                    <button
-                        type="button"
-                        class="small-btn"
-                        onclick="selectFolder('pdf_folder')"
-                    >
-                        Seleccionar carpeta
-                    </button>
-                </div>
-                <div class="hint">
-                    Ruta de la carpeta donde están los PDFs originales SU.
-                </div>
-                <div class="default-path">
-                    Por defecto: {{ pdf_folder }}
-                </div>
-            </div>
-
-            <div class="button-row">
-                <button id="generate-btn" type="submit">
-                    Generar reporte
-                </button>
-
-                <button id="stop-btn" type="button" class="stop-btn">
-                    Detener
-                </button>
-            </div>
-        </form>
-
-        <div class="section">
-            <h3>Registro en vivo</h3>
-            <div class="status" id="status">Esperando...</div>
-            <div id="terminal"></div>
-        </div>
-    </div>
-
-    <script>
-        let eventSource = null;
-
-        const form = document.getElementById("generate-form");
-        const generateBtn = document.getElementById("generate-btn");
-        const stopBtn = document.getElementById("stop-btn");
-        const terminal = document.getElementById("terminal");
-        const statusBox = document.getElementById("status");
-
-        function appendTerminal(text) {
-            terminal.textContent += text;
-            terminal.scrollTop = terminal.scrollHeight;
-        }
-
-        function setRunningState(isRunning) {
-            generateBtn.disabled = isRunning;
-            stopBtn.disabled = false;
-        }
-
-        function closeStream() {
-            if (eventSource !== null) {
-                eventSource.close();
-                eventSource = null;
-            }
-        }
-
-        async function selectFile(inputId) {
-            try {
-                const response = await fetch("/browse-file");
-                const data = await response.json();
-
-                if (data.path) {
-                    document.getElementById(inputId).value = data.path;
-                } else if (data.error) {
-                    appendTerminal("\nError seleccionando archivo: " + data.error + "\n");
-                }
-            } catch (error) {
-                appendTerminal("\nError seleccionando archivo: " + String(error) + "\n");
-            }
-        }
-
-        async function selectFolder(inputId) {
-            try {
-                const response = await fetch("/browse-folder");
-                const data = await response.json();
-
-                if (data.path) {
-                    document.getElementById(inputId).value = data.path;
-                } else if (data.error) {
-                    appendTerminal("\nError seleccionando carpeta: " + data.error + "\n");
-                }
-            } catch (error) {
-                appendTerminal("\nError seleccionando carpeta: " + String(error) + "\n");
-            }
-        }
-
-        function startStream() {
-            closeStream();
-
-            eventSource = new EventSource("/stream");
-
-            eventSource.onmessage = function(event) {
-                if (event.data && event.data.trim() !== "") {
-                    appendTerminal(event.data + "\n");
-                }
-
-                if (event.data.includes("[PROCESS_FINISHED]")) {
-                    statusBox.textContent = "Proceso terminado.";
-                    setRunningState(false);
-                    closeStream();
-                }
-
-                if (event.data.includes("[PROCESS_FINISHED_WITH_ERROR]")) {
-                    statusBox.textContent = "Proceso terminó con error.";
-                    setRunningState(false);
-                    closeStream();
-                }
-
-                if (event.data.includes("[PROCESS_STOPPED]")) {
-                    statusBox.textContent = "Proceso detenido.";
-                    setRunningState(false);
-                    closeStream();
-                }
-            };
-
-            eventSource.onerror = function() {
-                appendTerminal("\n[STREAM CLOSED]\n");
-                statusBox.textContent = "Conexión del registro cerrada.";
-                setRunningState(false);
-                closeStream();
-            };
-        }
-
-        form.addEventListener("submit", async function(event) {
-            event.preventDefault();
-
-            terminal.textContent = "";
-            statusBox.textContent = "Iniciando...";
-            setRunningState(true);
-
-            const formData = new FormData(form);
-
-            try {
-                const response = await fetch("/generate", {
-                    method: "POST",
-                    body: formData
-                });
-
-                const data = await response.json();
-
-                if (!data.ok) {
-                    statusBox.textContent = "Error al iniciar.";
-                    appendTerminal(data.error + "\n");
-                    setRunningState(false);
-                    return;
-                }
-
-                statusBox.textContent = "Ejecutando...";
-                startStream();
-
-            } catch (error) {
-                statusBox.textContent = "Error de conexión.";
-                appendTerminal(String(error) + "\n");
-                setRunningState(false);
-            }
-        });
-
-        stopBtn.addEventListener("click", async function() {
-            try {
-                appendTerminal("\n[STOP REQUESTED]\n");
-                statusBox.textContent = "Deteniendo...";
-
-                const response = await fetch("/stop", {
-                    method: "POST"
-                });
-
-                const data = await response.json();
-
-                if (!data.ok) {
-                    appendTerminal(data.error + "\n");
-                    statusBox.textContent = "No se pudo detener.";
-                    setRunningState(false);
-                }
-
-            } catch (error) {
-                appendTerminal("\nError al detener: " + String(error) + "\n");
-                statusBox.textContent = "Error al detener.";
-                setRunningState(false);
-            }
-        });
-    </script>
-</body>
-</html>
+# app.py
+
+from flask import Flask, render_template, request, jsonify, Response
+from pathlib import Path
+
+import subprocess
+import threading
+import queue
+import sys
+import os
+import webbrowser
+import time
+import traceback
+
+
+# ------------------------------------------------------------
+# Products / crops from products.py
+# ------------------------------------------------------------
+try:
+    from products import ALLOWED_PRODUCTS
+except Exception as e:
+    print("WARNING: Could not import ALLOWED_PRODUCTS from products.py")
+    print("Error:", e)
+
+    ALLOWED_PRODUCTS = [
+        "PAPA NATIVA",
+        "PAPA MEJORADA",
+        "QUINUA",
+        "CAÑIHUA",
+        "AVENA",
+        "CEBADA",
+        "HABA",
+        "TRIGO",
+    ]
+
+
+app = Flask(__name__)
+
+
+# ------------------------------------------------------------
+# Defaults
+# ------------------------------------------------------------
+DEFAULT_RESULTADOS_EXCEL = "RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx"
+DEFAULT_TEMPLATE_EXCEL = "Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa.xlsx"
+DEFAULT_REPORT_SCRIPT = "report_pdf.py"
+DEFAULT_REPORT_ROOT = "reports"
+DEFAULT_PDF_FOLDER = "pdfs"
+
+
+# ------------------------------------------------------------
+# Base directory
+# ------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+
+
+# ------------------------------------------------------------
+# Crop/product options
+# ------------------------------------------------------------
+CULTIVOS = ALLOWED_PRODUCTS
+
+
+# ------------------------------------------------------------
+# Process state
+# ------------------------------------------------------------
+process = None
+output_queue = queue.Queue()
+process_lock = threading.Lock()
+
+
+def clear_output_queue():
+    """
+    Clear old terminal output before starting a new process.
+    """
+
+    while not output_queue.empty():
+        try:
+            output_queue.get_nowait()
+        except queue.Empty:
+            break
+
+
+def enqueue_output(proc):
+    """
+    Read subprocess output line by line and send it to the live terminal queue.
+    """
+
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            if line:
+                output_queue.put(line.rstrip())
+
+    except Exception as e:
+        output_queue.put(f"[ERROR READING PROCESS OUTPUT] {e}")
+
+    return_code = proc.wait()
+
+    if return_code == 0:
+        output_queue.put("[PROCESS_FINISHED]")
+    else:
+        output_queue.put(f"[PROCESS_FINISHED_WITH_ERROR] return code = {return_code}")
+
+
+@app.route("/")
+def index():
+    return render_template(
+        "index.html",
+        cultivos=CULTIVOS,
+        resultados_excel=DEFAULT_RESULTADOS_EXCEL,
+        template_excel=DEFAULT_TEMPLATE_EXCEL,
+        report_script=DEFAULT_REPORT_SCRIPT,
+        report_root=DEFAULT_REPORT_ROOT,
+        pdf_folder=DEFAULT_PDF_FOLDER,
+    )
+
+
+@app.route("/browse-file")
+def browse_file():
+    """
+    Open native Windows file selector and return the real file path.
+
+    This works because Flask is running locally on the same Windows machine.
+    """
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        path = filedialog.askopenfilename(
+            title="Seleccionar archivo",
+            filetypes=[
+                ("Excel files", "*.xlsx *.xlsm *.xls"),
+                ("Python files", "*.py"),
+                ("All files", "*.*"),
+            ],
+        )
+
+        root.destroy()
+
+        return jsonify({
+            "path": path,
+            "error": "",
+        })
+
+    except Exception as e:
+        return jsonify({
+            "path": "",
+            "error": str(e),
+        })
+
+
+@app.route("/browse-folder")
+def browse_folder():
+    """
+    Open native Windows folder selector and return the real folder path.
+
+    This works because Flask is running locally on the same Windows machine.
+    """
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        path = filedialog.askdirectory(
+            title="Seleccionar carpeta"
+        )
+
+        root.destroy()
+
+        return jsonify({
+            "path": path,
+            "error": "",
+        })
+
+    except Exception as e:
+        return jsonify({
+            "path": "",
+            "error": str(e),
+        })
+
+
+@app.route("/generate", methods=["POST"])
+def generate():
+    """
+    Start report generation.
+
+    The paths come directly from the text inputs.
+    They are filled manually or with the Windows selector.
+    """
+
+    global process
+
+    with process_lock:
+        if process is not None and process.poll() is None:
+            return jsonify({
+                "ok": False,
+                "error": "Ya hay un proceso ejecutándose. Deténlo antes de iniciar otro.",
+            })
+
+        clear_output_queue()
+
+        name = request.form.get("name", "").strip()
+        cultivo = request.form.get("cultivo", "").strip()
+
+        if not name:
+            return jsonify({
+                "ok": False,
+                "error": "El nombre es obligatorio.",
+            })
+
+        if not cultivo:
+            return jsonify({
+                "ok": False,
+                "error": "El cultivo es obligatorio.",
+            })
+
+        resultados_excel = request.form.get(
+            "resultados_excel",
+            DEFAULT_RESULTADOS_EXCEL,
+        ).strip() or DEFAULT_RESULTADOS_EXCEL
+
+        template_excel = request.form.get(
+            "template_excel",
+            DEFAULT_TEMPLATE_EXCEL,
+        ).strip() or DEFAULT_TEMPLATE_EXCEL
+
+        report_script = request.form.get(
+            "report_script",
+            DEFAULT_REPORT_SCRIPT,
+        ).strip() or DEFAULT_REPORT_SCRIPT
+
+        report_root = request.form.get(
+            "report_root",
+            DEFAULT_REPORT_ROOT,
+        ).strip() or DEFAULT_REPORT_ROOT
+
+        pdf_folder = request.form.get(
+            "pdf_folder",
+            DEFAULT_PDF_FOLDER,
+        ).strip() or DEFAULT_PDF_FOLDER
+
+        cmd = [
+            sys.executable,
+            "-u",
+            "main.py",
+            "--resultados-excel",
+            resultados_excel,
+            "--template-excel",
+            template_excel,
+            "--name",
+            name,
+            "--cultivo",
+            cultivo,
+            "--report-root",
+            report_root,
+            "--pdf-folder",
+            pdf_folder,
+            "--report-script",
+            report_script,
+        ]
+
+        output_queue.put("Ejecutando comando:")
+        output_queue.put(" ".join(f'"{x}"' if " " in x else x for x in cmd))
+        output_queue.put("")
+        output_queue.put(f"Base de Datos Excel: {resultados_excel}")
+        output_queue.put(f"Plantilla de Excel: {template_excel}")
+        output_queue.put(f"Script de reporte: {report_script}")
+        output_queue.put(f"Carpeta de reportes: {report_root}")
+        output_queue.put(f"Carpeta PDFs SU: {pdf_folder}")
+        output_queue.put("")
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                cwd=BASE_DIR,
+            )
+
+            thread = threading.Thread(
+                target=enqueue_output,
+                args=(process,),
+                daemon=True,
+            )
+            thread.start()
+
+            return jsonify({"ok": True})
+
+        except Exception as e:
+            process = None
+            return jsonify({
+                "ok": False,
+                "error": str(e),
+            })
+
+
+@app.route("/stream")
+def stream():
+    """
+    Server-Sent Events endpoint for live terminal output.
+    """
+
+    def generate_events():
+        while True:
+            try:
+                line = output_queue.get(timeout=0.5)
+
+                # Avoid breaking SSE if a line contains newlines.
+                line = str(line).replace("\r", "").replace("\n", " ")
+
+                yield f"data: {line}\n\n"
+
+                if (
+                    "[PROCESS_FINISHED]" in line
+                    or "[PROCESS_FINISHED_WITH_ERROR]" in line
+                    or "[PROCESS_STOPPED]" in line
+                ):
+                    break
+
+            except queue.Empty:
+                # Keep the connection alive.
+                yield "data: \n\n"
+
+    return Response(
+        generate_events(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/stop", methods=["POST"])
+def stop():
+    """
+    Stop currently running process.
+
+    Windows version: use process.terminate().
+    """
+
+    global process
+
+    with process_lock:
+        if process is None or process.poll() is not None:
+            return jsonify({
+                "ok": False,
+                "error": "No hay un proceso activo para detener.",
+            })
+
+        try:
+            process.terminate()
+            output_queue.put("[PROCESS_STOPPED]")
+
+            return jsonify({"ok": True})
+
+        except Exception as e:
+            return jsonify({
+                "ok": False,
+                "error": str(e),
+            })
+
+
+if __name__ == "__main__":
+    url = "http://127.0.0.1:5000"
+
+    try:
+        print("=" * 80)
+        print("Generador de Reportes INIA Puno")
+        print("=" * 80)
+        print(f"Carpeta actual: {BASE_DIR}")
+        print(f"Abriendo navegador en: {url}")
+        print("No cierres esta ventana mientras usas la aplicación.")
+        print("=" * 80)
+
+        def open_browser():
+            time.sleep(1.5)
+            webbrowser.open(url)
+
+        threading.Thread(
+            target=open_browser,
+            daemon=True,
+        ).start()
+
+        app.run(
+            host="127.0.0.1",
+            port=5000,
+            debug=False,
+            threaded=True,
+            use_reloader=False,
+        )
+
+    except Exception:
+        print("\nERROR:")
+        traceback.print_exc()
+        input("\nPresiona ENTER para cerrar...")
