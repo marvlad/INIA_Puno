@@ -40,12 +40,11 @@ REQUIRED_FERTILIZER = "Estiércol de Vacuno"
 #   1. P2O5
 #   2. K2O
 #   3. N
-#   4. CaO
-#   5. MgO
 #
-# S is ignored because it is not measured.
+# CaO, MgO, and S are ignored for optimization.
+# They will still be reported in the nutrient balance.
 # ------------------------------------------------------------
-OPTIMIZED_NUTRIENTS = ["P2O5", "K2O", "N", "CaO", "MgO"]
+OPTIMIZED_NUTRIENTS = ["P2O5", "K2O", "N"]
 
 
 # ------------------------------------------------------------
@@ -437,9 +436,10 @@ def get_missing_nutrients(requirements, doses, selected_fertilizers, tolerance=1
     Return missing nutrient amounts after calculating supplied nutrients.
 
     Only checks:
-        P2O5, K2O, N, CaO, MgO
+        P2O5, K2O, N
 
-    S is ignored.
+    Ignores:
+        CaO, MgO, S
     """
 
     requirements = effective_requirements(requirements)
@@ -485,17 +485,15 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         supplied_i >= required_i
 
     for:
-        P2O5, K2O, N, CaO, MgO
+        P2O5, K2O, N
 
-    S is ignored.
+    CaO, MgO, and S are ignored for optimization.
 
     Priority:
         1. minimize P2O5 excess
         2. minimize K2O excess
         3. minimize N excess
-        4. minimize CaO excess
-        5. minimize MgO excess
-        6. minimize fertilizer dose and avoid Molimax
+        4. minimize fertilizer dose and avoid Molimax
     """
 
     requirements = effective_requirements(requirements)
@@ -615,11 +613,9 @@ def solution_priority_key(requirements, doses, selected_fertilizers):
         1. smallest P2O5 excess
         2. smallest K2O excess
         3. smallest N excess
-        4. smallest CaO excess
-        5. smallest MgO excess
-        6. avoid Molimax
-        7. fewer fertilizers
-        8. smaller total dose
+        4. avoid Molimax
+        5. fewer fertilizers
+        6. smaller total dose
     """
 
     requirements = effective_requirements(requirements)
@@ -657,10 +653,10 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
     Strict final validation.
 
     Checks:
-        P2O5, K2O, N, CaO, MgO
+        P2O5, K2O, N
 
     Ignores:
-        S
+        CaO, MgO, S
 
     Rule:
         supplied_i >= required_i
@@ -673,8 +669,8 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
     optimized_indices = get_optimized_nutrient_indices()
 
     print("\nSTRICT FINAL VALIDATION")
-    print("Rule: supplied_i must be >= required_i for P2O5, K2O, N, CaO, and MgO.")
-    print("S is ignored because it is not measured.")
+    print("Rule: supplied_i must be >= required_i for P2O5, K2O, and N.")
+    print("CaO, MgO, and S are ignored for optimization.")
 
     missing_lines = []
 
@@ -683,9 +679,7 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
         app = apport[i]
         rem = remaining[i]
 
-        if name == "S":
-            rule = "IGNORED"
-        elif i in optimized_indices:
+        if i in optimized_indices:
             rule = "CHECKED"
 
             if rem > tolerance:
@@ -695,7 +689,7 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
                     f"missing = {rem:.2f}"
                 )
         else:
-            rule = "NOT OPTIMIZED"
+            rule = "IGNORED"
 
         print(
             f"  {name:5s}: "
@@ -739,10 +733,10 @@ def optimize_fertilizers(requirements, ph):
         - Estiércol de Vacuno is always included.
         - Use only fertilizers allowed by pH.
         - Use maximum 5 fertilizers.
-        - Optimize P2O5, K2O, N, CaO, MgO in that exact priority order.
-        - Ignore S.
+        - Optimize P2O5, K2O, and N in that exact priority order.
+        - Ignore CaO, MgO, and S.
         - Molimax (20-20-20) and Molimax (16-16-16) have low priority.
-        - Final supplied nutrient must be >= requirement.
+        - Final supplied nutrient must be >= requirement for P2O5, K2O, and N.
 
     Extra retry protection:
         If after rounding the final dose a nutrient is still below the
@@ -773,6 +767,8 @@ def optimize_fertilizers(requirements, ph):
         print(f"Maximum fertilizers used = {MAX_FERTILIZERS_USED}")
         print(f"Allowed fertilizers = {get_allowed_fertilizers(ph)}")
         print(f"Combinations to test = {len(combinations_to_test)}")
+        print(f"Nutrients optimized = {OPTIMIZED_NUTRIENTS}")
+        print("Ignored nutrients = CaO, MgO, S")
 
         for combo in combinations_to_test:
             result = solve_linear_program_for_combo(
@@ -812,12 +808,12 @@ def optimize_fertilizers(requirements, ph):
             last_error = (
                 "\nNo feasible fertilizer combination was found.\n\n"
                 "Possible reasons:\n"
-                "  1. Requirements are too high.\n"
+                "  1. Requirements for P2O5, K2O, or N are too high.\n"
                 "  2. pH removed too many fertilizers.\n"
                 "  3. OTHER_FERTILIZER_MAX is too low.\n"
                 "  4. ESTIERCOL_MAX is too low.\n"
-                "  5. P2O5, K2O, N, CaO, and MgO must all be satisfied.\n"
-                "  6. S is ignored and cannot help feasibility.\n"
+                "  5. P2O5, K2O, and N must all be satisfied.\n"
+                "  6. CaO, MgO, and S are ignored and cannot help feasibility.\n"
             )
             break
 
@@ -857,7 +853,7 @@ def optimize_fertilizers(requirements, ph):
         print("Some nutrients are still below the original requirement after rounding:")
 
         for nutrient_name, missing_amount in missing.items():
-            print(f"  {nutrient_name}: missing {missing_amount:.4f} kg/ha")
+            print(f"  {nutient_name}: missing {missing_amount:.4f} kg/ha")
 
         print("\nRedoing optimization with safety margin...")
 
@@ -991,19 +987,17 @@ def print_optimization_results(requirements, result):
 
     print("\nOriginal requirements:")
     print("Negative requirements are treated as zero.")
-    print("P2O5, K2O, N, CaO, and MgO are optimized.")
-    print("S is ignored because it is not measured.")
+    print("P2O5, K2O, and N are optimized.")
+    print("CaO, MgO, and S are ignored for optimization but still reported.")
 
     for i, name in enumerate(NUTRIENTS):
         original = original_requirements[i]
         effective = requirements[i]
 
-        if name == "S":
-            opt_status = "IGNORED, NOT MEASURED"
-        elif i in optimized_indices:
+        if i in optimized_indices:
             opt_status = "OPTIMIZED"
         else:
-            opt_status = "REPORTED ONLY"
+            opt_status = "REPORTED ONLY, NOT OPTIMIZED"
 
         if original < 0:
             status = "NEGATIVE -> USED AS ZERO"
@@ -1039,10 +1033,10 @@ def print_optimization_results(requirements, result):
 
     print("\nNutrient balance:")
     print("Hard rule:")
-    print("  supplied_i >= required_i for P2O5, K2O, N, CaO, and MgO")
+    print("  supplied_i >= required_i for P2O5, K2O, and N")
     print("Priority:")
-    print("  P2O5 first, then K2O, then N, then CaO, then MgO")
-    print("S is ignored because it is not measured.")
+    print("  P2O5 first, then K2O, then N")
+    print("CaO, MgO, and S are ignored for optimization but still reported.")
     print(f"Reference tolerance for status: {EXCESS_TOLERANCE:.1f} kg/ha")
 
     all_required_covered = True
@@ -1053,10 +1047,7 @@ def print_optimization_results(requirements, result):
         rem = remaining[i]
         exc = excess[i]
 
-        if name == "S":
-            status = "IGNORED, NOT MEASURED"
-
-        elif i in optimized_indices:
+        if i in optimized_indices:
             if req > 0:
                 if rem > 1e-6:
                     status = "MISSING"
@@ -1070,7 +1061,6 @@ def print_optimization_results(requirements, result):
                     status = "NOT REQUIRED, ADDED"
                 else:
                     status = "NOT REQUIRED"
-
         else:
             status = "REPORTED ONLY, NOT OPTIMIZED"
 
@@ -1086,7 +1076,7 @@ def print_optimization_results(requirements, result):
     print("\nFinal check:")
 
     if all_required_covered:
-        print("  OK: P2O5, K2O, N, CaO, and MgO requirements are covered.")
+        print("  OK: P2O5, K2O, and N requirements are covered.")
         print(f"  OK: {REQUIRED_FERTILIZER} was included.")
     else:
         print("  WARNING: at least one optimized nutrient requirement is missing.")
@@ -1095,4 +1085,5 @@ def print_optimization_results(requirements, result):
     print(f"  pH-selected fertilizers: {selected_fertilizers}")
     print(f"  Best priority key: {getattr(result, 'best_key', None)}")
     print(f"  Nutrients: {list(NUTRIENTS)}")
+    print(f"  Optimized nutrients: {OPTIMIZED_NUTRIENTS}")
     print(f"  All fertilizers: {FERTILIZER_NAMES}")
