@@ -48,6 +48,19 @@ OPTIMIZED_NUTRIENTS = ["P2O5", "K2O", "N"]
 
 
 # ------------------------------------------------------------
+# Dynamic excess tolerance
+#
+# Final rule:
+#   requirement <= supplied <= requirement + tolerance
+#
+# If no valid solution exists, tolerance increases by 10 kg/ha.
+# ------------------------------------------------------------
+INITIAL_EXCESS_TOLERANCE = 0.0
+EXCESS_TOLERANCE_STEP = 10.0
+MAX_EXCESS_TOLERANCE = 300.0
+
+
+# ------------------------------------------------------------
 # Molimax has low priority.
 # It can be used, but only if needed.
 # Names must match the exact Excel/header names.
@@ -58,12 +71,6 @@ LOW_PRIORITY_FERTILIZERS = [
 ]
 
 LOW_PRIORITY_PENALTY = 10_000.0
-
-
-# ------------------------------------------------------------
-# Reporting tolerance
-# ------------------------------------------------------------
-EXCESS_TOLERANCE = 50.0
 
 
 # ------------------------------------------------------------
@@ -477,12 +484,19 @@ def requirements_with_safety_margin(requirements, missing, safety_margin=SAFETY_
 # ------------------------------------------------------------
 # Core optimizer
 # ------------------------------------------------------------
-def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
+def solve_linear_program_for_combo(
+    requirements,
+    ph,
+    selected_fertilizers,
+    excess_tolerance,
+):
     """
     Lexicographic optimizer for one fertilizer combination.
 
-    Hard constraint:
+    Hard constraints for optimized nutrients:
+
         supplied_i >= required_i
+        supplied_i <= required_i + excess_tolerance
 
     for:
         P2O5, K2O, N
@@ -512,9 +526,12 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         req = requirements[nutrient_index]
         nutrient_vector = formula[:, nutrient_index]
 
-        # Hard constraint:
+        # ----------------------------------------------------
+        # Lower hard constraint:
         # supplied_i >= required_i
+        #
         # -supplied_i <= -required_i
+        # ----------------------------------------------------
         if req > 0:
             row = np.zeros(n_variables, dtype=float)
             row[:n_fertilizers] = -nutrient_vector
@@ -522,9 +539,24 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
             A_ub.append(row)
             b_ub.append(-req)
 
+        # ----------------------------------------------------
+        # Upper hard constraint:
+        # supplied_i <= required_i + excess_tolerance
+        #
+        # This prevents suma de nutrientes from being too high.
+        # ----------------------------------------------------
+        row = np.zeros(n_variables, dtype=float)
+        row[:n_fertilizers] = nutrient_vector
+
+        A_ub.append(row)
+        b_ub.append(req + excess_tolerance)
+
+        # ----------------------------------------------------
         # Excess variable:
         # excess_i >= supplied_i - required_i
+        #
         # supplied_i - excess_i <= required_i
+        # ----------------------------------------------------
         row = np.zeros(n_variables, dtype=float)
         row[:n_fertilizers] = nutrient_vector
         row[n_fertilizers + local_j] = -1.0
@@ -599,6 +631,7 @@ def solve_linear_program_for_combo(requirements, ph, selected_fertilizers):
         result.excess_variables = full_x[n_fertilizers:]
         result.selected_fertilizers = selected_fertilizers
         result.fixed_excess_values = fixed_excess_values
+        result.excess_tolerance_used = excess_tolerance
 
     return result
 
@@ -648,7 +681,13 @@ def solution_priority_key(requirements, doses, selected_fertilizers):
     return tuple(key)
 
 
-def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6):
+def validate_solution(
+    requirements,
+    doses,
+    selected_fertilizers,
+    tolerance=1e-6,
+    excess_tolerance=None,
+):
     """
     Strict final validation.
 
@@ -658,36 +697,56 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
     Ignores:
         CaO, MgO, S
 
-    Rule:
+    Rules:
         supplied_i >= required_i
+        supplied_i <= required_i + excess_tolerance
     """
 
     requirements = effective_requirements(requirements)
     apport = nutrient_apport(doses, selected_fertilizers)
     remaining = requirements - apport
+    excess = apport - requirements
 
     optimized_indices = get_optimized_nutrient_indices()
 
     print("\nSTRICT FINAL VALIDATION")
-    print("Rule: supplied_i must be >= required_i for P2O5, K2O, and N.")
+    print("Rule 1: supplied_i must be >= required_i for P2O5, K2O, and N.")
+
+    if excess_tolerance is not None:
+        print(
+            "Rule 2: supplied_i must be <= required_i "
+            f"+ {excess_tolerance:.2f} kg/ha."
+        )
+
     print("CaO, MgO, and S are ignored for optimization.")
 
-    missing_lines = []
+    error_lines = []
 
     for i, name in enumerate(NUTRIENTS):
         req = requirements[i]
         app = apport[i]
         rem = remaining[i]
+        exc = excess[i]
 
         if i in optimized_indices:
             rule = "CHECKED"
 
             if rem > tolerance:
-                missing_lines.append(
+                error_lines.append(
                     f"{name}: required = {req:.2f}, "
                     f"supplied = {app:.2f}, "
                     f"missing = {rem:.2f}"
                 )
+
+            if excess_tolerance is not None:
+                if exc > excess_tolerance + tolerance:
+                    error_lines.append(
+                        f"{name}: required = {req:.2f}, "
+                        f"supplied = {app:.2f}, "
+                        f"excess = {exc:.2f}, "
+                        f"allowed excess = {excess_tolerance:.2f}"
+                    )
+
         else:
             rule = "IGNORED"
 
@@ -696,14 +755,15 @@ def validate_solution(requirements, doses, selected_fertilizers, tolerance=1e-6)
             f"required = {req:10.2f}   "
             f"supplied = {app:10.2f}   "
             f"remaining = {rem:10.2f}   "
+            f"excess = {exc:10.2f}   "
             f"{rule}"
         )
 
-    if missing_lines:
+    if error_lines:
         raise RuntimeError(
             "\nINVALID OPTIMIZATION RESULT.\n"
-            "At least one optimized nutrient requirement is still missing.\n\n"
-            + "\n".join(missing_lines)
+            "At least one optimized nutrient is outside the allowed range.\n\n"
+            + "\n".join(error_lines)
         )
 
     return True
@@ -735,148 +795,202 @@ def optimize_fertilizers(requirements, ph):
         - Use maximum 5 fertilizers.
         - Optimize P2O5, K2O, and N in that exact priority order.
         - Ignore CaO, MgO, and S.
-        - Molimax (20-20-20) and Molimax (16-16-16) have low priority.
         - Final supplied nutrient must be >= requirement for P2O5, K2O, and N.
-
-    Extra retry protection:
-        If after rounding the final dose a nutrient is still below the
-        original requirement, the optimizer repeats with a safety margin.
+        - Final supplied nutrient must be <= requirement + dynamic tolerance.
+        - If no solution is found, dynamic tolerance increases by 10 kg/ha.
+        - Molimax (20-20-20) and Molimax (16-16-16) have low priority.
     """
 
     original_requirements = effective_requirements(requirements)
-    working_requirements = original_requirements.copy()
+
+    tolerance_values = np.arange(
+        INITIAL_EXCESS_TOLERANCE,
+        MAX_EXCESS_TOLERANCE + EXCESS_TOLERANCE_STEP,
+        EXCESS_TOLERANCE_STEP,
+        dtype=float,
+    )
 
     last_missing = None
     last_error = None
 
-    for attempt in range(1, MAX_OPTIMIZATION_RETRIES + 1):
+    for excess_tolerance in tolerance_values:
 
-        print("\n" + "=" * 80)
-        print(f"OPTIMIZATION ATTEMPT {attempt}/{MAX_OPTIMIZATION_RETRIES}")
-        print("=" * 80)
+        print("\n" + "#" * 80)
+        print(f"TRYING EXCESS TOLERANCE = {excess_tolerance:.1f} kg/ha")
+        print("#" * 80)
 
-        combinations_to_test = generate_allowed_fertilizer_combinations(ph)
+        working_requirements = original_requirements.copy()
 
-        best_result = None
-        best_key = None
-        best_combo = None
+        for attempt in range(1, MAX_OPTIMIZATION_RETRIES + 1):
 
-        print("\nSearching best fertilizer combination")
-        print(f"pH = {ph}")
-        print(f"pH class = {get_ph_class(ph)}")
-        print(f"Maximum fertilizers used = {MAX_FERTILIZERS_USED}")
-        print(f"Allowed fertilizers = {get_allowed_fertilizers(ph)}")
-        print(f"Combinations to test = {len(combinations_to_test)}")
-        print(f"Nutrients optimized = {OPTIMIZED_NUTRIENTS}")
-        print("Ignored nutrients = CaO, MgO, S")
+            print("\n" + "=" * 80)
+            print(f"OPTIMIZATION ATTEMPT {attempt}/{MAX_OPTIMIZATION_RETRIES}")
+            print("=" * 80)
 
-        for combo in combinations_to_test:
-            result = solve_linear_program_for_combo(
-                requirements=working_requirements,
-                ph=ph,
-                selected_fertilizers=combo,
+            combinations_to_test = generate_allowed_fertilizer_combinations(ph)
+
+            best_result = None
+            best_key = None
+            best_combo = None
+
+            print("\nSearching best fertilizer combination")
+            print(f"pH = {ph}")
+            print(f"pH class = {get_ph_class(ph)}")
+            print(f"Maximum fertilizers used = {MAX_FERTILIZERS_USED}")
+            print(f"Allowed fertilizers = {get_allowed_fertilizers(ph)}")
+            print(f"Combinations to test = {len(combinations_to_test)}")
+            print(f"Nutrients optimized = {OPTIMIZED_NUTRIENTS}")
+            print("Ignored nutrients = CaO, MgO, S")
+            print(
+                "Allowed nutrient range: "
+                "requirement <= supplied <= requirement "
+                f"+ {excess_tolerance:.1f} kg/ha"
             )
 
-            if not result.success:
-                continue
+            for combo in combinations_to_test:
+                result = solve_linear_program_for_combo(
+                    requirements=working_requirements,
+                    ph=ph,
+                    selected_fertilizers=combo,
+                    excess_tolerance=excess_tolerance,
+                )
 
-            # This is the dose that will be written to CSV/Excel.
-            rounded_doses = round_up_to_1_decimal(result.x)
+                if not result.success:
+                    continue
 
-            try:
-                validate_solution(
+                # This is the dose that will be written to CSV/Excel.
+                rounded_doses = round_up_to_1_decimal(result.x)
+
+                try:
+                    validate_solution(
+                        requirements=working_requirements,
+                        doses=rounded_doses,
+                        selected_fertilizers=combo,
+                        excess_tolerance=excess_tolerance,
+                    )
+                except RuntimeError:
+                    continue
+
+                key = solution_priority_key(
                     requirements=working_requirements,
                     doses=rounded_doses,
                     selected_fertilizers=combo,
                 )
-            except RuntimeError:
-                continue
 
-            key = solution_priority_key(
-                requirements=working_requirements,
-                doses=rounded_doses,
-                selected_fertilizers=combo,
-            )
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_result = result
+                    best_combo = combo
+                    best_result.x = rounded_doses
 
-            if best_key is None or key < best_key:
-                best_key = key
-                best_result = result
-                best_combo = combo
-                best_result.x = rounded_doses
+            if best_result is None:
+                last_error = (
+                    "\nNo feasible fertilizer combination was found "
+                    f"with excess tolerance = {excess_tolerance:.1f} kg/ha.\n\n"
+                    "Possible reasons:\n"
+                    "  1. Requirements for P2O5, K2O, or N are too high.\n"
+                    "  2. pH removed too many fertilizers.\n"
+                    "  3. OTHER_FERTILIZER_MAX is too low.\n"
+                    "  4. ESTIERCOL_MAX is too low.\n"
+                    "  5. The allowed excess tolerance is still too strict.\n"
+                    "  6. CaO, MgO, and S are ignored and cannot help feasibility.\n"
+                )
 
-        if best_result is None:
-            last_error = (
-                "\nNo feasible fertilizer combination was found.\n\n"
-                "Possible reasons:\n"
-                "  1. Requirements for P2O5, K2O, or N are too high.\n"
-                "  2. pH removed too many fertilizers.\n"
-                "  3. OTHER_FERTILIZER_MAX is too low.\n"
-                "  4. ESTIERCOL_MAX is too low.\n"
-                "  5. P2O5, K2O, and N must all be satisfied.\n"
-                "  6. CaO, MgO, and S are ignored and cannot help feasibility.\n"
-            )
-            break
+                print(last_error)
+                print(
+                    f"Increasing tolerance by {EXCESS_TOLERANCE_STEP:.1f} "
+                    "kg/ha and trying again..."
+                )
 
-        best_result.selected_fertilizers = best_combo
-        best_result.best_key = best_key
-        best_result.original_requirements = original_requirements
-        best_result.working_requirements = working_requirements
+                break
 
-        print("\nBest fertilizer combination found:")
-        for fertilizer_name in best_combo:
-            print(f"  - {fertilizer_name}")
+            best_result.selected_fertilizers = best_combo
+            best_result.best_key = best_key
+            best_result.original_requirements = original_requirements
+            best_result.working_requirements = working_requirements
+            best_result.excess_tolerance_used = excess_tolerance
 
-        print(f"\nBest priority key: {best_key}")
+            print("\nBest fertilizer combination found:")
+            for fertilizer_name in best_combo:
+                print(f"  - {fertilizer_name}")
 
-        missing = get_missing_nutrients(
-            requirements=original_requirements,
-            doses=best_result.x,
-            selected_fertilizers=best_combo,
-            tolerance=1e-6,
-        )
+            print(f"\nBest priority key: {best_key}")
+            print(f"Excess tolerance used: {excess_tolerance:.1f} kg/ha")
 
-        if not missing:
-            print("\nFINAL POST-CHECK PASSED")
-            print("All optimized nutrients satisfy the original requirements.")
-
-            validate_solution(
+            missing = get_missing_nutrients(
                 requirements=original_requirements,
                 doses=best_result.x,
                 selected_fertilizers=best_combo,
+                tolerance=1e-6,
             )
 
-            return best_result
+            try:
+                validate_solution(
+                    requirements=original_requirements,
+                    doses=best_result.x,
+                    selected_fertilizers=best_combo,
+                    excess_tolerance=excess_tolerance,
+                )
+            except RuntimeError as err:
+                last_error = str(err)
 
-        last_missing = missing
+                print("\nFINAL POST-CHECK FAILED")
+                print(last_error)
+                print(
+                    f"Increasing tolerance by {EXCESS_TOLERANCE_STEP:.1f} "
+                    "kg/ha and trying again..."
+                )
 
-        print("\nFINAL POST-CHECK FAILED")
-        print("Some nutrients are still below the original requirement after rounding:")
+                break
 
-        for nutrient_name, missing_amount in missing.items():
-            print(f"  {nutient_name}: missing {missing_amount:.4f} kg/ha")
+            if not missing:
+                print("\nFINAL POST-CHECK PASSED")
+                print("All optimized nutrients satisfy the original requirements.")
+                print(
+                    "Final rule satisfied: "
+                    "requirement <= supplied <= requirement "
+                    f"+ {excess_tolerance:.1f} kg/ha"
+                )
 
-        print("\nRedoing optimization with safety margin...")
+                return best_result
 
-        working_requirements = requirements_with_safety_margin(
-            requirements=working_requirements,
-            missing=missing,
-            safety_margin=SAFETY_MARGIN,
-        )
+            last_missing = missing
 
-        print("\nNew working requirements:")
+            print("\nFINAL POST-CHECK FAILED")
+            print("Some nutrients are still below the original requirement after rounding:")
 
-        for nutrient_name in OPTIMIZED_NUTRIENTS:
-            idx = list(NUTRIENTS).index(nutrient_name)
-            print(
-                f"  {nutrient_name}: "
-                f"original = {original_requirements[idx]:.4f}, "
-                f"working = {working_requirements[idx]:.4f}"
+            for nutrient_name, missing_amount in missing.items():
+                print(f"  {nutrient_name}: missing {missing_amount:.4f} kg/ha")
+
+            print("\nRedoing optimization with safety margin...")
+
+            working_requirements = requirements_with_safety_margin(
+                requirements=working_requirements,
+                missing=missing,
+                safety_margin=SAFETY_MARGIN,
             )
+
+            print("\nNew working requirements:")
+
+            for nutrient_name in OPTIMIZED_NUTRIENTS:
+                idx = list(NUTRIENTS).index(nutrient_name)
+                print(
+                    f"  {nutrient_name}: "
+                    f"original = {original_requirements[idx]:.4f}, "
+                    f"working = {working_requirements[idx]:.4f}"
+                )
 
     error_lines = [
         "",
-        "Optimization failed after retrying.",
-        "The final supplied nutrients are still below the original requirements.",
+        "Optimization failed after trying all dynamic excess tolerances.",
+        "The final supplied nutrients could not satisfy the allowed range.",
+        "",
+        "Required rule:",
+        "  requirement <= supplied <= requirement + dynamic_tolerance",
+        "",
+        f"Initial tolerance: {INITIAL_EXCESS_TOLERANCE:.1f} kg/ha",
+        f"Tolerance step: {EXCESS_TOLERANCE_STEP:.1f} kg/ha",
+        f"Maximum tolerance: {MAX_EXCESS_TOLERANCE:.1f} kg/ha",
         "",
     ]
 
@@ -969,10 +1083,13 @@ def print_optimization_results(requirements, result):
 
     optimized_indices = get_optimized_nutrient_indices()
 
+    used_tolerance = getattr(result, "excess_tolerance_used", None)
+
     validate_solution(
         requirements=requirements,
         doses=doses,
         selected_fertilizers=selected_fertilizers,
+        excess_tolerance=used_tolerance,
     )
 
     print("\nSelected fertilizers:")
@@ -1034,10 +1151,16 @@ def print_optimization_results(requirements, result):
     print("\nNutrient balance:")
     print("Hard rule:")
     print("  supplied_i >= required_i for P2O5, K2O, and N")
+    print("Upper rule:")
+    print("  supplied_i <= required_i + dynamic tolerance for P2O5, K2O, and N")
     print("Priority:")
     print("  P2O5 first, then K2O, then N")
     print("CaO, MgO, and S are ignored for optimization but still reported.")
-    print(f"Reference tolerance for status: {EXCESS_TOLERANCE:.1f} kg/ha")
+
+    if used_tolerance is not None:
+        print(f"Dynamic excess tolerance used: {used_tolerance:.1f} kg/ha")
+    else:
+        print("Dynamic excess tolerance used: unknown")
 
     all_required_covered = True
 
@@ -1052,13 +1175,18 @@ def print_optimization_results(requirements, result):
                 if rem > 1e-6:
                     status = "MISSING"
                     all_required_covered = False
-                elif exc > EXCESS_TOLERANCE + 1e-6:
-                    status = "OK, HIGH EXCESS"
+                elif used_tolerance is not None and exc > used_tolerance + 1e-6:
+                    status = "TOO MUCH EXCESS"
+                    all_required_covered = False
+                elif used_tolerance is not None and exc > 1e-6:
+                    status = "OK, WITHIN TOLERANCE"
                 else:
                     status = "OK"
             else:
-                if app > EXCESS_TOLERANCE:
-                    status = "NOT REQUIRED, ADDED"
+                if used_tolerance is not None and app > used_tolerance + 1e-6:
+                    status = "NOT REQUIRED, TOO MUCH ADDED"
+                elif app > 1e-6:
+                    status = "NOT REQUIRED, ADDED WITHIN TOLERANCE"
                 else:
                     status = "NOT REQUIRED"
         else:
@@ -1077,13 +1205,15 @@ def print_optimization_results(requirements, result):
 
     if all_required_covered:
         print("  OK: P2O5, K2O, and N requirements are covered.")
+        print("  OK: P2O5, K2O, and N are within the dynamic tolerance.")
         print(f"  OK: {REQUIRED_FERTILIZER} was included.")
     else:
-        print("  WARNING: at least one optimized nutrient requirement is missing.")
+        print("  WARNING: at least one optimized nutrient is outside the allowed range.")
 
     print("\nDebug information:")
     print(f"  pH-selected fertilizers: {selected_fertilizers}")
     print(f"  Best priority key: {getattr(result, 'best_key', None)}")
     print(f"  Nutrients: {list(NUTRIENTS)}")
     print(f"  Optimized nutrients: {OPTIMIZED_NUTRIENTS}")
+    print(f"  Dynamic excess tolerance used: {used_tolerance}")
     print(f"  All fertilizers: {FERTILIZER_NAMES}")
