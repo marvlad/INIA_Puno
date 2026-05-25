@@ -90,12 +90,12 @@ LOW_PRIORITY_PENALTY = 10_000.0
 # ------------------------------------------------------------
 FERTILIZER_TABLE = {
     "Estiércol de Vacuno": {
-        "N": 2.73,
-        "P2O5": 0.62,
-        "K2O": 0.80,
-        "CaO": 0.34,
-        "MgO": 1.00,
-        "S": 0.40,
+        "N": 0.40,
+        "P2O5": 0.01,
+        "K2O": 0.49,
+        "CaO": 0.01,
+        "MgO": 0.04,
+        "S": 0.13,
         "acid": True,
         "alkaline": True,
         "neutral": True,
