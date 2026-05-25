@@ -570,9 +570,9 @@ def build_excel_from_template(
     if ph_number is None:
         print(" Phosphorus method: pH invalid or empty")
     elif ph_number < 7.0:
-        print(" Phosphorus method: Bray because pH < 7.0")
+        print(" Phosphorus method: Bray because pH < 6.5")
     else:
-        print(" Phosphorus method: Olsen because pH >= 7.0")
+        print(" Phosphorus method: Olsen because pH >= 6.5")
 
     # ------------------------------------------------------------
     # 2. Open template
