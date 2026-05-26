@@ -88,6 +88,18 @@ def parse_args():
         help="Folder where original SU PDF reports are located.",
     )
 
+    # Keep this argument for backward compatibility.
+    # Another program may still pass --report-script.
+    # It is intentionally ignored because report_pdf.py is no longer used.
+    parser.add_argument(
+        "--report-script",
+        default="report_pdf.py",
+        help=(
+            "Deprecated. Kept only for compatibility with external callers. "
+            "This argument is ignored."
+        ),
+    )
+
     parser.add_argument(
         "--excel-pdf-sheets",
         nargs="+",
@@ -127,6 +139,13 @@ def main():
     try:
         resultados_excel = Path(args.resultados_excel).resolve()
         template_excel = Path(args.template_excel).resolve()
+
+        # NOTE:
+        # args.report_script is intentionally NOT used.
+        # Do not check whether report_pdf.py exists.
+        # Do not call report_runner.py.
+        # This keeps compatibility with programs that still pass:
+        # --report-script report_pdf.py
 
         if not resultados_excel.exists():
             raise FileNotFoundError(
