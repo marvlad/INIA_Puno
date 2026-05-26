@@ -2,12 +2,16 @@
 
 from pathlib import Path
 import csv
+import gc
+import time
+
 from openpyxl import load_workbook
 
 
 # ------------------------------------------------------------
 # Read fertilizer names and doses from CSV
 # ------------------------------------------------------------
+
 def read_fertilizer_names_and_doses_from_csv(csv_file):
     """
     Read fertilizer names and optimized doses from the CSV created by optimizer.py.
@@ -43,7 +47,6 @@ def read_fertilizer_names_and_doses_from_csv(csv_file):
         raise ValueError(f"CSV file has no data rows: {csv_file}")
 
     row = rows[0]
-
     fertilizer_data = []
 
     for fertilizer_name in reader.fieldnames:
@@ -70,7 +73,6 @@ def read_fertilizer_names_and_doses_from_csv(csv_file):
         except ValueError:
             continue
 
-        # Only write fertilizers that were really selected.
         if dose > 0:
             fertilizer_data.append((fertilizer_name, dose))
 
@@ -86,6 +88,7 @@ def read_fertilizer_names_and_doses_from_csv(csv_file):
 # Read simple vector from CSV
 # Kept for compatibility with the previous code.
 # ------------------------------------------------------------
+
 def read_vector_from_csv(csv_file):
     """
     Reads a CSV containing fertilizer optimal values.
@@ -93,18 +96,16 @@ def read_vector_from_csv(csv_file):
     It supports either:
 
     1) A simple one-row vector:
-        10,20,30,40,50
+       10,20,30,40,50
 
     2) A CSV with one value per row:
-        value
-        10
-        20
-        30
-        40
-        50
+       value
+       10
+       20
+       30
 
     3) A CSV with a column named:
-        value, values, dose, dosis, optimal, kg_ha, kg/ha
+       value, values, dose, dosis, optimal, kg_ha, kg/ha
     """
 
     csv_file = Path(csv_file)
@@ -115,7 +116,6 @@ def read_vector_from_csv(csv_file):
     values = []
 
     with open(csv_file, "r", encoding="utf-8-sig", newline="") as f:
-        # Try DictReader first
         reader = csv.DictReader(f)
 
         if reader.fieldnames:
@@ -158,7 +158,6 @@ def read_vector_from_csv(csv_file):
                 if values:
                     return values
 
-        # If DictReader did not work, parse as normal CSV
         f.seek(0)
         reader2 = csv.reader(f)
 
@@ -172,7 +171,6 @@ def read_vector_from_csv(csv_file):
                 try:
                     values.append(float(item.replace(",", ".")))
                 except ValueError:
-                    # Skip headers or text
                     continue
 
     if not values:
@@ -184,6 +182,7 @@ def read_vector_from_csv(csv_file):
 # ------------------------------------------------------------
 # Write fertilizer names and optimal doses to Excel
 # ------------------------------------------------------------
+
 def write_vector_to_excel(
     excel_file,
     csv_file,
@@ -197,27 +196,15 @@ def write_vector_to_excel(
     """
     Writes optimized fertilizer names and doses into Excel.
 
-    The Excel fertilizer table in Nec_fert has rows:
-
-        B53:C59
-
-    Therefore this function only clears and writes rows 53 to 59.
-
     Default output:
 
         Nec_fert!B53 = fertilizer name 1
         Nec_fert!C53 = fertilizer dose 1
-
         Nec_fert!B54 = fertilizer name 2
         Nec_fert!C54 = fertilizer dose 2
-
         ...
-
         Nec_fert!B59 = fertilizer name 7
         Nec_fert!C59 = fertilizer dose 7
-
-    The optimizer should normally return maximum 5 fertilizers, so rows 53 to 59
-    are enough.
     """
 
     excel_file = Path(excel_file)
@@ -232,7 +219,8 @@ def write_vector_to_excel(
 
     if end_row < start_row:
         raise ValueError(
-            f"end_row must be >= start_row. Got start_row={start_row}, end_row={end_row}"
+            f"end_row must be >= start_row. "
+            f"Got start_row={start_row}, end_row={end_row}"
         )
 
     fertilizer_data = read_fertilizer_names_and_doses_from_csv(csv_file)
@@ -249,40 +237,41 @@ def write_vector_to_excel(
 
     output_excel.parent.mkdir(parents=True, exist_ok=True)
 
-    wb = load_workbook(excel_file)
+    wb = None
 
-    if sheet_name not in wb.sheetnames:
-        raise ValueError(
-            f"Sheet not found: {sheet_name}\n"
-            f"Available sheets: {wb.sheetnames}"
-        )
+    try:
+        wb = load_workbook(excel_file)
 
-    ws = wb[sheet_name]
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(
+                f"Sheet not found: {sheet_name}\n"
+                f"Available sheets: {wb.sheetnames}"
+            )
 
-    # ------------------------------------------------------------
-    # Clean only the real fertilizer input table.
-    #
-    # IMPORTANT:
-    # Do NOT clear start_row + 30.
-    # In this template, rows below 59 contain merged/formatted cells.
-    # Writing into those cells can produce:
-    #
-    # AttributeError: 'MergedCell' object attribute 'value' is read-only
-    # ------------------------------------------------------------
-    for row in range(start_row, end_row + 1):
-        ws[f"{name_column}{row}"] = None
-        ws[f"{dose_column}{row}"] = None
+        ws = wb[sheet_name]
 
-    # ------------------------------------------------------------
-    # Fill B53:B59 and C53:C59
-    # ------------------------------------------------------------
-    for i, (fertilizer_name, dose) in enumerate(fertilizer_data):
-        row = start_row + i
+        # Clear only B53:C59 by default.
+        for row in range(start_row, end_row + 1):
+            ws[f"{name_column}{row}"] = None
+            ws[f"{dose_column}{row}"] = None
 
-        ws[f"{name_column}{row}"] = fertilizer_name
-        ws[f"{dose_column}{row}"] = round(dose, 1)
+        # Fill B53:B59 and C53:C59.
+        for i, (fertilizer_name, dose) in enumerate(fertilizer_data):
+            row = start_row + i
+            ws[f"{name_column}{row}"] = fertilizer_name
+            ws[f"{dose_column}{row}"] = round(dose, 1)
 
-    wb.save(output_excel)
+        wb.save(output_excel)
+
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+        del wb
+        gc.collect()
 
     print("\nFertilizer names and doses written to Excel:")
     print(f"  Input Excel: {excel_file}")
@@ -298,7 +287,7 @@ def write_vector_to_excel(
     for i, (fertilizer_name, dose) in enumerate(fertilizer_data):
         row = start_row + i
         print(
-            f"  {name_column}{row} = {fertilizer_name}   "
+            f"  {name_column}{row} = {fertilizer_name} "
             f"{dose_column}{row} = {dose:.1f}"
         )
 
@@ -306,11 +295,14 @@ def write_vector_to_excel(
 # ------------------------------------------------------------
 # Recalculate Excel with xlwings
 # ------------------------------------------------------------
+
 def recalculate_excel_with_xlwings(excel_file):
     """
     Open an Excel file with xlwings, force recalculation, save, and close.
 
-    This is the simple working-style version.
+    This version is safer for repeated execution because it always closes:
+    - workbook
+    - Excel application
     """
 
     import xlwings as xw
@@ -330,24 +322,26 @@ def recalculate_excel_with_xlwings(excel_file):
 
         wb = app.books.open(str(excel_file))
 
-        # Force Excel recalculation
         app.calculate()
-
         wb.save()
-        wb.close()
-        wb = None
 
         print(f"Recalculated and saved: {excel_file}")
 
     finally:
-        try:
-            if wb is not None:
+        if wb is not None:
+            try:
                 wb.close()
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-        try:
-            if app is not None:
+        if app is not None:
+            try:
                 app.quit()
-        except Exception:
-            pass
+            except Exception:
+                pass
+
+        del wb
+        del app
+
+        gc.collect()
+        time.sleep(0.2)
