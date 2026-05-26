@@ -4,6 +4,8 @@ from pathlib import Path
 import sqlite3
 import unicodedata
 import re
+import datetime
+import math
 
 from openpyxl import load_workbook
 
@@ -134,9 +136,58 @@ def make_unique_columns(headers):
     return columns
 
 
+def sqlite_safe_value(value):
+    """
+    Convert any Excel/Python value into something SQLite accepts.
+
+    SQLite accepts:
+        None
+        int
+        float
+        str
+        bytes
+
+    SQLite does NOT directly accept:
+        datetime.time
+        datetime.date
+        datetime.datetime
+    """
+
+    if value is None:
+        return None
+
+    # Excel time cells, for example 08:30:00
+    if isinstance(value, datetime.time):
+        return value.strftime("%H:%M:%S")
+
+    # Excel date + time cells
+    if isinstance(value, datetime.datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Excel date cells
+    if isinstance(value, datetime.date):
+        return value.strftime("%Y-%m-%d")
+
+    # Float NaN safety
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        return value
+
+    # SQLite accepts these directly
+    if isinstance(value, (int, str, bytes)):
+        return value
+
+    # Fallback for strange Excel/openpyxl objects
+    return str(value)
+
+
 def convert_value(value):
     """
-    Convert Excel values into SQLite-friendly values.
+    Convert Excel values into SQLite-friendly values while reading rows.
+
+    This is the first cleanup pass.
+    A second safety pass is applied before SQLite insertion.
     """
 
     if value is None:
@@ -148,10 +199,35 @@ def convert_value(value):
         if value == "":
             return None
 
-        # Keep text as text.
         return value
 
-    return value
+    return sqlite_safe_value(value)
+
+
+def debug_check_sqlite_values(final_rows, final_columns):
+    """
+    Check if unsupported objects still exist before inserting into SQLite.
+    Useful for debugging Excel weird values.
+    """
+
+    allowed_types = (type(None), int, float, str, bytes)
+
+    for row_index, row in enumerate(final_rows, start=1):
+        for col_index, value in enumerate(row, start=1):
+            if not isinstance(value, allowed_types):
+                column_name = final_columns[col_index - 1]
+
+                print("\nERROR: Unsupported value before SQLite insert")
+                print(f"Row number in final_rows: {row_index}")
+                print(f"SQLite parameter number: {col_index}")
+                print(f"Column name: {column_name}")
+                print(f"Value: {value!r}")
+                print(f"Python type: {type(value)}")
+
+                raise TypeError(
+                    f"Unsupported SQLite value in column {column_name}: "
+                    f"{type(value)}"
+                )
 
 
 # ------------------------------------------------------------
@@ -314,7 +390,17 @@ def load_excel_to_sqlite(
         final_row.append(normalize_text(cultivo_value))
         final_row.append(clean_su_code(codigo_value))
 
+        # Final safety pass before SQLite insertion.
+        # This fixes datetime.time and other unsupported objects.
+        final_row = [
+            sqlite_safe_value(value)
+            for value in final_row
+        ]
+
         final_rows.append(final_row)
+
+    # Debug safety check before SQLite insert
+    debug_check_sqlite_values(final_rows, final_columns)
 
     # ------------------------------------------------------------
     # Create SQLite table and insert rows
