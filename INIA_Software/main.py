@@ -8,26 +8,20 @@ from pathlib import Path
 
 from excel_builder import build_excel_from_template
 from excel_requirements import get_requirements_with_excel
-
 from optimizer import (
     optimize_fertilizers,
     save_optimal_values_csv,
     print_optimization_results,
 )
-
 from excel_writer import (
     write_vector_to_excel,
     recalculate_excel_with_xlwings,
 )
-
 from excel_to_pdf import export_excel_sheets_to_pdf
-from report_runner import generate_pdf_report
-
 from su_pdf_finder import (
     get_su_info_from_resultados_excel,
     copy_su_pdfs_to_report_dir,
 )
-
 from utils import (
     safe_filename,
     make_report_directory,
@@ -51,7 +45,7 @@ def parse_args():
         description=(
             "Full fertilizer workflow: build Excel from RESULTADOS + template, "
             "read requirements, optimize fertilizer doses, write final Excel, "
-            "export Excel sheets to PDF, generate report PDF, and copy original SU PDF reports."
+            "export Excel sheets to PDF, and copy original SU PDF reports."
         )
     )
 
@@ -95,12 +89,6 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--report-script",
-        default="report_pdf.py",
-        help="Path to your existing PDF report generator script.",
-    )
-
-    parser.add_argument(
         "--excel-pdf-sheets",
         nargs="+",
         default=["Gráfico_Int", "Rec_fert"],
@@ -126,14 +114,12 @@ def main():
     #
     # This directory is deleted in the finally block.
     # ------------------------------------------------------------
-
     temp_run_dir = Path(
         tempfile.mkdtemp(prefix="fertilizer_pipeline_")
     ).resolve()
 
     temp_image_dir = temp_run_dir / "extracted_images"
 
-    generated_pdf = None
     copied_resultados_excel = None
     copied_template_excel = None
     copied_su_pdfs = []
@@ -141,7 +127,6 @@ def main():
     try:
         resultados_excel = Path(args.resultados_excel).resolve()
         template_excel = Path(args.template_excel).resolve()
-        report_script = Path(args.report_script).resolve()
 
         if not resultados_excel.exists():
             raise FileNotFoundError(
@@ -153,15 +138,9 @@ def main():
                 f"Template Excel not found: {template_excel}"
             )
 
-        if not report_script.exists():
-            raise FileNotFoundError(
-                f"Report script not found: {report_script}"
-            )
-
         # ------------------------------------------------------------
         # Create central report directory
         # ------------------------------------------------------------
-
         report_dir = make_report_directory(
             args.report_root,
             args.name,
@@ -181,7 +160,6 @@ def main():
         # ------------------------------------------------------------
         # Output files
         # ------------------------------------------------------------
-
         base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
 
         filled_excel = report_dir / (
@@ -201,14 +179,9 @@ def main():
             f"Excel_Report_{base_name}.pdf"
         )
 
-        output_pdf = report_dir / (
-            f"Informe_{base_name}.pdf"
-        )
-
         # ------------------------------------------------------------
         # 1. Build filled Excel from RESULTADOS + template
         # ------------------------------------------------------------
-
         print("\n[1] Building filled Excel from RESULTADOS + template")
 
         filled_excel_returned, ph_value = build_excel_from_template(
@@ -247,7 +220,6 @@ def main():
         # ------------------------------------------------------------
         # 2. Recalculate filled Excel before reading requirements
         # ------------------------------------------------------------
-
         print("\n[2] Recalculating filled Excel")
 
         recalculate_excel_with_xlwings(filled_excel)
@@ -257,7 +229,6 @@ def main():
         # ------------------------------------------------------------
         # 3. Read requirements from filled Excel: Nec_fert!K37:K42
         # ------------------------------------------------------------
-
         print("\n[3] Reading fertilizer requirements")
 
         requirements = get_requirements_with_excel(
@@ -270,7 +241,6 @@ def main():
         # ------------------------------------------------------------
         # 4. Optimize fertilizer values
         # ------------------------------------------------------------
-
         print("\n[4] Optimizing fertilizer doses")
 
         result = optimize_fertilizers(
@@ -293,7 +263,6 @@ def main():
         # ------------------------------------------------------------
         # 5. Write optimal values to final Excel
         # ------------------------------------------------------------
-
         print("\n[5] Writing optimized doses to final Excel")
 
         write_vector_to_excel(
@@ -312,7 +281,6 @@ def main():
         # ------------------------------------------------------------
         # 6. Recalculate optimized Excel
         # ------------------------------------------------------------
-
         print("\n[6] Recalculating optimized Excel")
 
         recalculate_excel_with_xlwings(optimized_excel)
@@ -322,7 +290,6 @@ def main():
         # ------------------------------------------------------------
         # 7. Export Excel sheets to PDF
         # ------------------------------------------------------------
-
         print("\n[7] Exporting Excel sheets to PDF")
 
         export_excel_sheets_to_pdf(
@@ -339,25 +306,9 @@ def main():
             )
 
         # ------------------------------------------------------------
-        # 8. Generate PDF report using report_pdf.py
+        # 8. Copy original input files into report directory
         # ------------------------------------------------------------
-
-        print("\n[8] Generating PDF report")
-
-        generated_pdf = generate_pdf_report(
-            report_script=report_script,
-            name=args.name,
-            cultivo=args.cultivo,
-            output_pdf=output_pdf,
-        )
-
-        cleanup_memory()
-
-        # ------------------------------------------------------------
-        # 9. Copy original input files into report directory
-        # ------------------------------------------------------------
-
-        print("\n[9] Copying input files to report directory")
+        print("\n[8] Copying input files to report directory")
 
         # Do NOT copy RESULTADOS Excel.
         copied_resultados_excel = None
@@ -372,11 +323,10 @@ def main():
         cleanup_memory()
 
         # ------------------------------------------------------------
-        # 10. Get SU information from RESULTADOS Excel
+        # 9. Get SU information from RESULTADOS Excel
         # ------------------------------------------------------------
-
         if args.pdf_folder:
-            print("\n[10] Getting SU information from RESULTADOS Excel")
+            print("\n[9] Getting SU information from RESULTADOS Excel")
 
             su_info = get_su_info_from_resultados_excel(
                 resultados_excel=resultados_excel,
@@ -384,11 +334,11 @@ def main():
             )
 
             print("\nSU information:")
-            print(f"  CODIGO: {su_info.get('codigo')}")
-            print(f"  SU number: {su_info.get('su_number')}")
-            print(f"  Year: {su_info.get('year')}")
-            print(f"  Place: {su_info.get('place')}")
-            print(f"  Lab: {su_info.get('lab')}")
+            print(f" CODIGO: {su_info.get('codigo')}")
+            print(f" SU number: {su_info.get('su_number')}")
+            print(f" Year: {su_info.get('year')}")
+            print(f" Place: {su_info.get('place')}")
+            print(f" Lab: {su_info.get('lab')}")
 
             copied_su_pdfs = copy_su_pdfs_to_report_dir(
                 su_info,
@@ -404,13 +354,12 @@ def main():
         # ------------------------------------------------------------
         # Final summary
         # ------------------------------------------------------------
-
         print("\n" + "=" * 80)
         print("DONE")
         print("=" * 80)
 
         print("\nCentral report directory:")
-        print(f"  {report_dir}")
+        print(f" {report_dir}")
 
         print("\nGenerated/copied files:")
 
@@ -421,21 +370,19 @@ def main():
             filled_excel,
             optimized_excel,
             excel_pdf,
-            generated_pdf,
         ]
 
         for file_path in files_to_show:
             if file_path:
-                print(f"  {file_path}")
+                print(f" {file_path}")
 
         for pdf_path in copied_su_pdfs:
-            print(f"  {pdf_path}")
+            print(f" {pdf_path}")
 
     finally:
         # ------------------------------------------------------------
         # Cleanup temporary files even if the workflow crashes
         # ------------------------------------------------------------
-
         try:
             shutil.rmtree(temp_run_dir, ignore_errors=True)
             print(f"\nTemporary directory removed: {temp_run_dir}")
