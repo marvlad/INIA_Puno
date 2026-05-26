@@ -1,6 +1,9 @@
 # main.py
 
 import argparse
+import gc
+import shutil
+import tempfile
 from pathlib import Path
 
 from excel_builder import build_excel_from_template
@@ -30,6 +33,17 @@ from utils import (
     make_report_directory,
     copy_file_to_dir,
 )
+
+
+def cleanup_memory():
+    """
+    Force Python garbage collection after heavy Excel/PDF operations.
+
+    This helps reduce memory usage when this script is executed many times.
+    However, Excel/xlwings functions must still close workbooks and quit Excel
+    properly inside their own functions.
+    """
+    gc.collect()
 
 
 def parse_args():
@@ -102,277 +116,334 @@ def parse_args():
 def main():
     args = parse_args()
 
-    resultados_excel = Path(args.resultados_excel).resolve()
-    template_excel = Path(args.template_excel).resolve()
-    report_script = Path(args.report_script).resolve()
-
-    if not resultados_excel.exists():
-        raise FileNotFoundError(
-            f"RESULTADOS Excel not found: {resultados_excel}"
-        )
-
-    if not template_excel.exists():
-        raise FileNotFoundError(
-            f"Template Excel not found: {template_excel}"
-        )
-
     # ------------------------------------------------------------
-    # Create central report directory
+    # Temporary directory for this specific execution
+    # ------------------------------------------------------------
+    #
+    # Important:
+    # If another program calls this script many times, we do not want
+    # all runs sharing the same extracted_images folder.
+    #
+    # This directory is deleted in the finally block.
     # ------------------------------------------------------------
 
-    report_dir = make_report_directory(
-        args.report_root,
-        args.name,
-        args.cultivo,
-    )
+    temp_run_dir = Path(
+        tempfile.mkdtemp(prefix="fertilizer_pipeline_")
+    ).resolve()
 
-    print("=" * 80)
-    print("FERTILIZER PIPELINE")
-    print("=" * 80)
-    print(f"Person: {args.name}")
-    print(f"Cultivo: {args.cultivo}")
-    print(f"RESULTADOS Excel: {resultados_excel}")
-    print(f"Template Excel: {template_excel}")
-    print(f"Report directory: {report_dir}")
+    temp_image_dir = temp_run_dir / "extracted_images"
 
-    # ------------------------------------------------------------
-    # Output files
-    # ------------------------------------------------------------
-
-    base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
-
-    filled_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
-        f"{base_name}_FILLED.xlsx"
-    )
-
-    optimized_excel = report_dir / (
-        f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
-        f"{base_name}_OPTIMIZED.xlsx"
-    )
-
-    requirements_csv = report_dir / "requirements.csv"
-    optimal_csv = report_dir / "optimal_values.csv"
-
-    excel_pdf = report_dir / (
-        f"Excel_Report_{base_name}.pdf"
-    )
-
-    output_pdf = report_dir / (
-        f"Informe_{base_name}.pdf"
-    )
-
-    # Initialize variables for final summary
     generated_pdf = None
     copied_resultados_excel = None
     copied_template_excel = None
     copied_su_pdfs = []
 
-    # ------------------------------------------------------------
-    # 1. Build filled Excel from RESULTADOS + template
-    # ------------------------------------------------------------
-
-    print("\n[1] Building filled Excel from RESULTADOS + template")
-
-    filled_excel_returned, ph_value = build_excel_from_template(
-        resultados_excel=resultados_excel,
-        template_excel=template_excel,
-        name=args.name,
-        cultivo=args.cultivo,
-        output_excel=filled_excel,
-        image_dir="extracted_images",
-    )
-
-    if ph_value is None:
-        raise ValueError(
-            "Could not extract pH from RESULTADOS Excel. "
-            "The optimizer needs pH to select allowed fertilizers."
-        )
-
     try:
-        ph_value = float(ph_value)
-    except Exception:
-        raise ValueError(
-            f"Invalid pH value extracted from RESULTADOS Excel: {ph_value}"
+        resultados_excel = Path(args.resultados_excel).resolve()
+        template_excel = Path(args.template_excel).resolve()
+        report_script = Path(args.report_script).resolve()
+
+        if not resultados_excel.exists():
+            raise FileNotFoundError(
+                f"RESULTADOS Excel not found: {resultados_excel}"
+            )
+
+        if not template_excel.exists():
+            raise FileNotFoundError(
+                f"Template Excel not found: {template_excel}"
+            )
+
+        if not report_script.exists():
+            raise FileNotFoundError(
+                f"Report script not found: {report_script}"
+            )
+
+        # ------------------------------------------------------------
+        # Create central report directory
+        # ------------------------------------------------------------
+
+        report_dir = make_report_directory(
+            args.report_root,
+            args.name,
+            args.cultivo,
         )
 
-    print(f"\nExtracted pH for optimizer: {ph_value}")
+        print("=" * 80)
+        print("FERTILIZER PIPELINE")
+        print("=" * 80)
+        print(f"Person: {args.name}")
+        print(f"Cultivo: {args.cultivo}")
+        print(f"RESULTADOS Excel: {resultados_excel}")
+        print(f"Template Excel: {template_excel}")
+        print(f"Report directory: {report_dir}")
+        print(f"Temporary run directory: {temp_run_dir}")
 
-    if not filled_excel.exists():
-        raise FileNotFoundError(
-            f"Filled Excel was not created: {filled_excel}"
+        # ------------------------------------------------------------
+        # Output files
+        # ------------------------------------------------------------
+
+        base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
+
+        filled_excel = report_dir / (
+            f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
+            f"{base_name}_FILLED.xlsx"
         )
 
-    print(f"Filled Excel created: {filled_excel}")
-
-    # ------------------------------------------------------------
-    # 2. Recalculate filled Excel before reading requirements
-    # ------------------------------------------------------------
-
-    print("\n[2] Recalculating filled Excel")
-
-    recalculate_excel_with_xlwings(filled_excel)
-
-    # ------------------------------------------------------------
-    # 3. Read requirements from filled Excel: Nec_fert!K37:K42
-    # ------------------------------------------------------------
-
-    print("\n[3] Reading fertilizer requirements")
-
-    requirements = get_requirements_with_excel(
-        excel_file=filled_excel,
-        output_csv=requirements_csv,
-    )
-
-    # ------------------------------------------------------------
-    # 4. Optimize fertilizer values
-    # ------------------------------------------------------------
-
-    print("\n[4] Optimizing fertilizer doses")
-
-    result = optimize_fertilizers(
-        requirements=requirements,
-        ph=ph_value,
-    )
-
-    print_optimization_results(
-        requirements,
-        result,
-    )
-
-    save_optimal_values_csv(
-        output_csv=optimal_csv,
-        result=result,
-    )
-
-    # ------------------------------------------------------------
-    # 5. Write optimal values to final Excel
-    # ------------------------------------------------------------
-
-    print("\n[5] Writing optimized doses to final Excel")
-
-    write_vector_to_excel(
-        excel_file=filled_excel,
-        csv_file=optimal_csv,
-        output_excel=optimized_excel,
-    )
-
-    if not optimized_excel.exists():
-        raise FileNotFoundError(
-            f"Optimized Excel was not created: {optimized_excel}"
+        optimized_excel = report_dir / (
+            f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
+            f"{base_name}_OPTIMIZED.xlsx"
         )
 
-    # ------------------------------------------------------------
-    # 6. Recalculate optimized Excel
-    # ------------------------------------------------------------
+        requirements_csv = report_dir / "requirements.csv"
+        optimal_csv = report_dir / "optimal_values.csv"
 
-    print("\n[6] Recalculating optimized Excel")
-
-    recalculate_excel_with_xlwings(optimized_excel)
-
-    # ------------------------------------------------------------
-    # 7. Export Excel sheets to PDF
-    # ------------------------------------------------------------
-
-    print("\n[7] Exporting Excel sheets to PDF")
-
-    export_excel_sheets_to_pdf(
-        excel_file=optimized_excel,
-        output_pdf=excel_pdf,
-        sheets=tuple(args.excel_pdf_sheets),
-    )
-
-    if not excel_pdf.exists():
-        raise FileNotFoundError(
-            f"Excel PDF was not created: {excel_pdf}"
+        excel_pdf = report_dir / (
+            f"Excel_Report_{base_name}.pdf"
         )
 
-    # ------------------------------------------------------------
-    # 8. Generate PDF report using report_pdf.py
-    # ------------------------------------------------------------
+        output_pdf = report_dir / (
+            f"Informe_{base_name}.pdf"
+        )
 
-    print("\n[8] Generating PDF report")
+        # ------------------------------------------------------------
+        # 1. Build filled Excel from RESULTADOS + template
+        # ------------------------------------------------------------
 
-    generated_pdf = generate_pdf_report(
-        report_script=report_script,
-        name=args.name,
-        cultivo=args.cultivo,
-        output_pdf=output_pdf,
-    )
+        print("\n[1] Building filled Excel from RESULTADOS + template")
 
-    # ------------------------------------------------------------
-    # 9. Copy original input files into report directory
-    # ------------------------------------------------------------
-
-    print("\n[9] Copying input files to report directory")
-
-    # Do NOT copy RESULTADOS Excel.
-    copied_resultados_excel = None
-    print("Skipping RESULTADOS Excel copy.")
-
-    # Keep copying the template Excel, as in the original workflow.
-    copied_template_excel = copy_file_to_dir(
-        template_excel,
-        report_dir,
-    )
-
-    # ------------------------------------------------------------
-    # 10. Get SU information from RESULTADOS Excel
-    # ------------------------------------------------------------
-
-    if args.pdf_folder:
-        print("\n[10] Getting SU information from RESULTADOS Excel")
-
-        su_info = get_su_info_from_resultados_excel(
+        filled_excel_returned, ph_value = build_excel_from_template(
             resultados_excel=resultados_excel,
-            person_name=args.name,
+            template_excel=template_excel,
+            name=args.name,
+            cultivo=args.cultivo,
+            output_excel=filled_excel,
+            image_dir=temp_image_dir,
         )
 
-        print("\nSU information:")
-        print(f"  CODIGO: {su_info.get('codigo')}")
-        print(f"  SU number: {su_info.get('su_number')}")
-        print(f"  Year: {su_info.get('year')}")
-        print(f"  Place: {su_info.get('place')}")
-        print(f"  Lab: {su_info.get('lab')}")
+        cleanup_memory()
 
-        copied_su_pdfs = copy_su_pdfs_to_report_dir(
-            su_info,
-            args.pdf_folder,
+        if ph_value is None:
+            raise ValueError(
+                "Could not extract pH from RESULTADOS Excel. "
+                "The optimizer needs pH to select allowed fertilizers."
+            )
+
+        try:
+            ph_value = float(ph_value)
+        except Exception:
+            raise ValueError(
+                f"Invalid pH value extracted from RESULTADOS Excel: {ph_value}"
+            )
+
+        print(f"\nExtracted pH for optimizer: {ph_value}")
+
+        if not filled_excel.exists():
+            raise FileNotFoundError(
+                f"Filled Excel was not created: {filled_excel}"
+            )
+
+        print(f"Filled Excel created: {filled_excel}")
+
+        # ------------------------------------------------------------
+        # 2. Recalculate filled Excel before reading requirements
+        # ------------------------------------------------------------
+
+        print("\n[2] Recalculating filled Excel")
+
+        recalculate_excel_with_xlwings(filled_excel)
+
+        cleanup_memory()
+
+        # ------------------------------------------------------------
+        # 3. Read requirements from filled Excel: Nec_fert!K37:K42
+        # ------------------------------------------------------------
+
+        print("\n[3] Reading fertilizer requirements")
+
+        requirements = get_requirements_with_excel(
+            excel_file=filled_excel,
+            output_csv=requirements_csv,
+        )
+
+        cleanup_memory()
+
+        # ------------------------------------------------------------
+        # 4. Optimize fertilizer values
+        # ------------------------------------------------------------
+
+        print("\n[4] Optimizing fertilizer doses")
+
+        result = optimize_fertilizers(
+            requirements=requirements,
+            ph=ph_value,
+        )
+
+        print_optimization_results(
+            requirements,
+            result,
+        )
+
+        save_optimal_values_csv(
+            output_csv=optimal_csv,
+            result=result,
+        )
+
+        cleanup_memory()
+
+        # ------------------------------------------------------------
+        # 5. Write optimal values to final Excel
+        # ------------------------------------------------------------
+
+        print("\n[5] Writing optimized doses to final Excel")
+
+        write_vector_to_excel(
+            excel_file=filled_excel,
+            csv_file=optimal_csv,
+            output_excel=optimized_excel,
+        )
+
+        cleanup_memory()
+
+        if not optimized_excel.exists():
+            raise FileNotFoundError(
+                f"Optimized Excel was not created: {optimized_excel}"
+            )
+
+        # ------------------------------------------------------------
+        # 6. Recalculate optimized Excel
+        # ------------------------------------------------------------
+
+        print("\n[6] Recalculating optimized Excel")
+
+        recalculate_excel_with_xlwings(optimized_excel)
+
+        cleanup_memory()
+
+        # ------------------------------------------------------------
+        # 7. Export Excel sheets to PDF
+        # ------------------------------------------------------------
+
+        print("\n[7] Exporting Excel sheets to PDF")
+
+        export_excel_sheets_to_pdf(
+            excel_file=optimized_excel,
+            output_pdf=excel_pdf,
+            sheets=tuple(args.excel_pdf_sheets),
+        )
+
+        cleanup_memory()
+
+        if not excel_pdf.exists():
+            raise FileNotFoundError(
+                f"Excel PDF was not created: {excel_pdf}"
+            )
+
+        # ------------------------------------------------------------
+        # 8. Generate PDF report using report_pdf.py
+        # ------------------------------------------------------------
+
+        print("\n[8] Generating PDF report")
+
+        generated_pdf = generate_pdf_report(
+            report_script=report_script,
+            name=args.name,
+            cultivo=args.cultivo,
+            output_pdf=output_pdf,
+        )
+
+        cleanup_memory()
+
+        # ------------------------------------------------------------
+        # 9. Copy original input files into report directory
+        # ------------------------------------------------------------
+
+        print("\n[9] Copying input files to report directory")
+
+        # Do NOT copy RESULTADOS Excel.
+        copied_resultados_excel = None
+        print("Skipping RESULTADOS Excel copy.")
+
+        # Keep copying the template Excel, as in the original workflow.
+        copied_template_excel = copy_file_to_dir(
+            template_excel,
             report_dir,
         )
 
-    else:
-        print("\nNo --pdf-folder provided. Skipping original SU PDF search.")
+        cleanup_memory()
 
-    # ------------------------------------------------------------
-    # Final summary
-    # ------------------------------------------------------------
+        # ------------------------------------------------------------
+        # 10. Get SU information from RESULTADOS Excel
+        # ------------------------------------------------------------
 
-    print("\n" + "=" * 80)
-    print("DONE")
-    print("=" * 80)
+        if args.pdf_folder:
+            print("\n[10] Getting SU information from RESULTADOS Excel")
 
-    print("\nCentral report directory:")
-    print(f"  {report_dir}")
+            su_info = get_su_info_from_resultados_excel(
+                resultados_excel=resultados_excel,
+                person_name=args.name,
+            )
 
-    print("\nGenerated/copied files:")
+            print("\nSU information:")
+            print(f"  CODIGO: {su_info.get('codigo')}")
+            print(f"  SU number: {su_info.get('su_number')}")
+            print(f"  Year: {su_info.get('year')}")
+            print(f"  Place: {su_info.get('place')}")
+            print(f"  Lab: {su_info.get('lab')}")
 
-    files_to_show = [
-        requirements_csv,
-        optimal_csv,
-        copied_template_excel,
-        filled_excel,
-        optimized_excel,
-        excel_pdf,
-        generated_pdf,
-    ]
+            copied_su_pdfs = copy_su_pdfs_to_report_dir(
+                su_info,
+                args.pdf_folder,
+                report_dir,
+            )
 
-    for file_path in files_to_show:
-        if file_path:
-            print(f"  {file_path}")
+            cleanup_memory()
 
-    for pdf_path in copied_su_pdfs:
-        print(f"  {pdf_path}")
+        else:
+            print("\nNo --pdf-folder provided. Skipping original SU PDF search.")
+
+        # ------------------------------------------------------------
+        # Final summary
+        # ------------------------------------------------------------
+
+        print("\n" + "=" * 80)
+        print("DONE")
+        print("=" * 80)
+
+        print("\nCentral report directory:")
+        print(f"  {report_dir}")
+
+        print("\nGenerated/copied files:")
+
+        files_to_show = [
+            requirements_csv,
+            optimal_csv,
+            copied_template_excel,
+            filled_excel,
+            optimized_excel,
+            excel_pdf,
+            generated_pdf,
+        ]
+
+        for file_path in files_to_show:
+            if file_path:
+                print(f"  {file_path}")
+
+        for pdf_path in copied_su_pdfs:
+            print(f"  {pdf_path}")
+
+    finally:
+        # ------------------------------------------------------------
+        # Cleanup temporary files even if the workflow crashes
+        # ------------------------------------------------------------
+
+        try:
+            shutil.rmtree(temp_run_dir, ignore_errors=True)
+            print(f"\nTemporary directory removed: {temp_run_dir}")
+        except Exception as e:
+            print(f"\nWarning: could not remove temporary directory: {temp_run_dir}")
+            print(f"Reason: {e}")
+
+        cleanup_memory()
 
 
 if __name__ == "__main__":
