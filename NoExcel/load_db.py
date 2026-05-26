@@ -13,7 +13,7 @@ from openpyxl import load_workbook
 # ------------------------------------------------------------
 
 INPUT_EXCEL = "RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx"
-SHEET_NAME = "Base_Datos"
+SHEET_NAME = "BD2024"
 
 OUTPUT_DB = "database/inia_database.sqlite"
 TABLE_NAME = "muestras"
