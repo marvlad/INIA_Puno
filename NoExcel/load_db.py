@@ -12,13 +12,8 @@ from openpyxl import load_workbook
 # Configuration
 # ------------------------------------------------------------
 
-<<<<<<< Updated upstream
-INPUT_EXCEL = "RESULTADOS USUARIOS 2M_Illpa_2.0.xlsx"
-SHEET_NAME = "BD2024"
-=======
 INPUT_EXCEL = "RESULTADOS USUARIOS 2M_Illpa 2.0.2_CORREGIDO.xlsx"
-SHEET_NAME = "Base_Datos"
->>>>>>> Stashed changes
+SHEET_NAME = "BD2024"
 
 OUTPUT_DB = "database/inia_database.sqlite"
 TABLE_NAME = "muestras"
