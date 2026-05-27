@@ -1,7 +1,6 @@
 # make_recommendation_by_name.py
 
 import argparse
-import sqlite3
 import unicodedata
 from pathlib import Path
 
@@ -20,7 +19,15 @@ from reportlab.platypus import (
 )
 
 from fertilization_dose import calculate_fertilization_dose
-from nutrient_extraction import find_crop_row, value_to_float
+
+from nutrient_extraction import (
+    find_crop_row,
+    value_to_float,
+)
+
+from get_fertilization_dose_by_name import (
+    get_row_by_name_and_crop as shared_get_row_by_name_and_crop,
+)
 
 from optimizer_from_riqueza import (
     NUTRIENTS,
@@ -31,7 +38,6 @@ from optimizer_from_riqueza import (
 
 
 DB_FILE = "database/inia_database.sqlite"
-TABLE_NAME = "muestras"
 
 EXTRACTION_CSV = "config/Extraccion_Nut.csv"
 CONVERSION_FACTORS_CSV = "config/fertilizer_conversion_factors.csv"
@@ -53,8 +59,8 @@ def normalize_text(value):
     text = str(value).strip().lower()
     text = unicodedata.normalize("NFKD", text)
     text = "".join(
-        c for c in text
-        if not unicodedata.combining(c)
+        char for char in text
+        if not unicodedata.combining(char)
     )
 
     cleaned = []
@@ -99,7 +105,7 @@ def format_number(value, digits=0):
 
 
 def find_column_by_words(fieldnames, words):
-    words = [normalize_text(w) for w in words]
+    words = [normalize_text(word) for word in words]
 
     for field in fieldnames:
         field_norm = normalize_text(field)
@@ -138,6 +144,25 @@ def read_csv_flexible(path):
 
 
 # ============================================================
+# DATABASE LOOKUP
+# ============================================================
+
+def get_row_by_name_and_crop(db_file, name, cultivo):
+    """
+    Use the same working database lookup used by technical_inform_name_cultivo.py.
+
+    This avoids assuming a fixed table name like 'muestras' or fixed normalized
+    columns. The shared function already works with your current SQLite DB.
+    """
+
+    return shared_get_row_by_name_and_crop(
+        db_file=db_file,
+        name=name,
+        cultivo=cultivo,
+    )
+
+
+# ============================================================
 # CROP DATA FROM Extraccion_Nut.csv
 # ============================================================
 
@@ -157,7 +182,7 @@ def get_crop_period_months(cultivo, extraction_csv=EXTRACTION_CSV):
             f"Could not find Periodo vegetativo column in {extraction_csv}"
         )
 
-    period = value_to_float(crop_row.get(period_col))
+    period = value_to_float(crop_row.get(period_col), None)
 
     if period is None:
         raise ValueError(
@@ -177,7 +202,7 @@ def get_rdto_estimado_from_extraction_csv(
     """
     Get RDTO ESTIMADO (t/ha) from config/Extraccion_Nut.csv.
 
-    Your CSV has:
+    The CSV has:
         Nombre Común
         Rendimiento (kg/ha)
 
@@ -273,7 +298,7 @@ def get_rdto_estimado_from_extraction_csv(
 
     if not mask.any():
         mask = df["_crop_norm_tmp"].apply(
-            lambda x: target in x or x in target
+            lambda value: target in value or value in target
         )
 
     if not mask.any():
@@ -307,54 +332,6 @@ def get_rdto_estimado_from_extraction_csv(
 
 
 # ============================================================
-# DATABASE LOOKUP
-# ============================================================
-
-def get_row_by_name_and_crop(db_file, name, cultivo):
-    db_file = Path(db_file)
-
-    if not db_file.exists():
-        raise FileNotFoundError(f"Database not found: {db_file}")
-
-    name_norm = normalize_text(name)
-    cultivo_norm = normalize_text(cultivo)
-
-    with sqlite3.connect(db_file) as conn:
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-
-        query = f"""
-            SELECT *
-            FROM "{TABLE_NAME}"
-            WHERE nombre_normalizado = ?
-              AND cultivo_normalizado = ?
-            LIMIT 1
-        """
-
-        cur.execute(query, (name_norm, cultivo_norm))
-        row = cur.fetchone()
-
-        if row is not None:
-            return dict(row)
-
-        query = f"""
-            SELECT *
-            FROM "{TABLE_NAME}"
-            WHERE nombre_normalizado LIKE ?
-              AND cultivo_normalizado LIKE ?
-            LIMIT 1
-        """
-
-        cur.execute(query, (f"%{name_norm}%", f"%{cultivo_norm}%"))
-        row = cur.fetchone()
-
-        if row is not None:
-            return dict(row)
-
-    return None
-
-
-# ============================================================
 # REQUIREMENTS AND OPTIMIZER HELPERS
 # ============================================================
 
@@ -384,6 +361,15 @@ def requirements_from_dose_result(dose_result):
 
 
 def get_selected_fertilizers(result):
+    """
+    Read selected fertilizers directly from the optimizer result.
+
+    optimizer_from_riqueza.optimize_fertilizers should return:
+        result.selected_fertilizers
+        result.x
+        result.fertilizer_table
+    """
+
     selected = []
 
     selected_names = list(getattr(result, "selected_fertilizers", []))
@@ -414,51 +400,32 @@ def get_optimizer_fertilizer_table(result):
     return fertilizer_table
 
 
-def get_row_number(row, possible_keys, default=0.0):
-    for key in possible_keys:
-        if key in row:
-            value = value_to_float(row.get(key), None)
-
-            if value is not None:
-                return value
-
-    return default
-
-
 def get_acidez_aluminio_from_row(row):
     """
     Calculate:
-        Al3+ + H+ = Acidez + Aluminio
+        Al3+ + H+ =
+            aluminio_intercambiable_cmol_plus_kg
+            +
+            acidez_hplus_cmol_plus_kg
     """
 
-    acidez = get_row_number(
-        row,
-        [
-            "acidez",
-            "acidez_intercambiable",
-            "acidez_interc",
-            "acidez_cmol_kg",
-            "acidez_cmolkg",
-            "acidez_cmol",
-        ],
-        default=0.0,
+    aluminio = value_to_float(
+        row.get("aluminio_intercambiable_cmol_plus_kg"),
+        0.0,
     )
 
-    aluminio = get_row_number(
-        row,
-        [
-            "aluminio",
-            "aluminio_intercambiable",
-            "al_intercambiable",
-            "al",
-            "aluminio_cmol_kg",
-            "aluminio_cmolkg",
-            "aluminio_cmol",
-        ],
-        default=0.0,
+    acidez = value_to_float(
+        row.get("acidez_hplus_cmol_plus_kg"),
+        0.0,
     )
 
-    return acidez + aluminio
+    if aluminio is None:
+        aluminio = 0.0
+
+    if acidez is None:
+        acidez = 0.0
+
+    return aluminio + acidez
 
 
 def classify_application_time(fertilizer_name):
@@ -710,7 +677,13 @@ def make_header(row, data, styles):
         ],
         [
             p("NOMBRE PARCELA", styles["TinyBold"]),
-            p(row.get("localidad_comunidad_caserio_asociacion_etc", row.get("nombre_parcela", "")), styles["Tiny"]),
+            p(
+                row.get(
+                    "localidad_comunidad_caserio_asociacion_etc",
+                    row.get("nombre_parcela", ""),
+                ),
+                styles["Tiny"],
+            ),
             p("RDTO ESTIMADO (t/ha)", styles["TinyBold"]),
             p(format_number(data["rdto_estimado_ton_ha"], 1), styles["Tiny"]),
         ],
@@ -755,27 +728,17 @@ def make_header(row, data, styles):
     return [title, info_title, table, Spacer(1, 0.18 * cm)]
 
 
-def nutrient_cell(value, styles):
-    value_float = value_to_float(value, 0.0)
-
-    if value_float is None:
-        value_float = 0.0
-
-    if value_float < 0:
-        return p(format_number(value_float, 0), styles["RedTiny"])
-
-    return p(format_number(value_float, 0), styles["Tiny"])
-
-
 def make_general_recommendation_table(data, styles):
-    req = {
-        nutrient: value_to_float(value, 0.0)
-        for nutrient, value in zip(NUTRIENTS, data["requirements"])
-    }
+    """
+    General recommendation table.
 
-    req_used = {
+    N, P2O5 and K2O are taken from SUMA DE NUTRIENTES,
+    i.e. from data["supplied"], calculated by the optimizer.
+    """
+
+    supplied = {
         nutrient: value_to_float(value, 0.0)
-        for nutrient, value in zip(NUTRIENTS, data["requirements_used"])
+        for nutrient, value in zip(NUTRIENTS, data["supplied"])
     }
 
     table_data = [
@@ -788,26 +751,10 @@ def make_general_recommendation_table(data, styles):
         ],
         [
             p(data["cultivo"], styles["Tiny"]),
-
-            # IMPORTANT:
-            # Do not force negative values to zero here.
-            # This shows the real final requirement from the calculation.
-            nutrient_cell(req.get("N", 0.0), styles),
-            nutrient_cell(req.get("P2O5", 0.0), styles),
-            nutrient_cell(req.get("K2O", 0.0), styles),
-
+            p(format_number(supplied.get("N", 0.0), 0), styles["Tiny"]),
+            p(format_number(supplied.get("P2O5", 0.0), 0), styles["Tiny"]),
+            p(format_number(supplied.get("K2O", 0.0), 0), styles["Tiny"]),
             p("No es necesario aplicar cal", styles["Tiny"]),
-        ],
-        [
-            p("Req. usado por optimizador", styles["TinyBold"]),
-            p(format_number(req_used.get("N", 0.0), 0), styles["Tiny"]),
-            p(format_number(req_used.get("P2O5", 0.0), 0), styles["Tiny"]),
-            p(format_number(req_used.get("K2O", 0.0), 0), styles["Tiny"]),
-            p(
-                "Los valores negativos indican que no se recomienda aporte adicional "
-                "de ese nutriente.",
-                styles["Tiny"],
-            ),
         ],
     ]
 
@@ -826,7 +773,6 @@ def make_general_recommendation_table(data, styles):
         ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.black),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#c9c9c9")),
-        ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#eeeeee")),
         ("ALIGN", (1, 0), (3, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -893,8 +839,9 @@ def make_observations(data, styles):
                 "La dosis de fertilización es de acuerdo a los análisis de suelos, "
                 "demanda nutricional de la planta y un rendimiento proyectado de: "
                 f"<b>{format_number(rendimiento, 1)} t/ha</b>. "
-                "Cuando un requerimiento final aparece negativo, significa que el "
-                "suelo ya cubre ese nutriente y no se recomienda aporte adicional.",
+                "Los valores de N, P2O5 y K2O mostrados en la recomendación general "
+                "corresponden a la suma de nutrientes aportados por los fertilizantes "
+                "seleccionados por el optimizador.",
                 styles["Small"],
             )
         ],
@@ -1208,7 +1155,7 @@ def print_terminal_summary(data):
     print(f"pH:                      {row.get('ph', '')}")
     print(f"RDTO ESTIMADO (t/ha):    {format_number(data['rdto_estimado_ton_ha'], 1)}")
     print(f"PERMANENCIA (meses):     {format_number(data['permanencia_meses'], 1)}")
-    print(f"Al3+H+ Acidez+Aluminio:  {format_number(data['alh'], 2)}")
+    print(f"Al3+H+ Al+H:             {format_number(data['alh'], 2)}")
 
     print("\nRequerimientos finales reales:")
     print("-" * 90)
@@ -1222,7 +1169,7 @@ def print_terminal_summary(data):
     for nutrient, value in zip(NUTRIENTS, data["requirements_used"]):
         print(f"{nutrient:5s}: {format_number(value, 2):>12s} kg/ha")
 
-    print("\nAporte calculado por el optimizador:")
+    print("\nSUMA DE NUTRIENTES / Aporte calculado por el optimizador:")
     print("-" * 90)
 
     for nutrient, value in zip(NUTRIENTS, data["supplied"]):
@@ -1253,10 +1200,30 @@ def main():
 
     parser.add_argument("--name", required=True, help="NOMBRES Y APELLIDOS")
     parser.add_argument("--cultivo", required=True, help="CULTIVO A INSTALAR")
-    parser.add_argument("--db", default=DB_FILE, help="SQLite database file.")
-    parser.add_argument("--extraction-csv", default=EXTRACTION_CSV)
-    parser.add_argument("--conversion-factors-csv", default=CONVERSION_FACTORS_CSV)
-    parser.add_argument("--riqueza-csv", default=RIQUEZA_CSV)
+
+    parser.add_argument(
+        "--db",
+        default=DB_FILE,
+        help="SQLite database file.",
+    )
+
+    parser.add_argument(
+        "--extraction-csv",
+        default=EXTRACTION_CSV,
+        help="Path to config/Extraccion_Nut.csv",
+    )
+
+    parser.add_argument(
+        "--conversion-factors-csv",
+        default=CONVERSION_FACTORS_CSV,
+        help="Path to config/fertilizer_conversion_factors.csv",
+    )
+
+    parser.add_argument(
+        "--riqueza-csv",
+        default=RIQUEZA_CSV,
+        help="Path to config/Riqueza_Fert.csv",
+    )
 
     parser.add_argument(
         "--output",
