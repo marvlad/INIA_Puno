@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Generador de Reportes INIA</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f0;
+            margin: 0;
+            color: #222;
+        }
+
+        header {
+            background: #2f4f2f;
+            color: white;
+            padding: 18px 24px;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        header p {
+            margin: 6px 0 0 0;
+            font-size: 14px;
+        }
+
+        main {
+            max-width: 1300px;
+            margin: auto;
+            padding: 20px;
+        }
+
+        .card {
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 18px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+        }
+
+        h2 {
+            margin-top: 0;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 8px;
+            font-size: 20px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        label {
+            display: block;
+            font-weight: bold;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+
+        input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px;
+            border: 1px solid #aaa;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .checkboxes {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(220px, 1fr));
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .checkboxes label {
+            font-weight: normal;
+            background: #f3f3f3;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+
+        button {
+            margin-top: 18px;
+            padding: 11px 18px;
+            background: #2f4f2f;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 15px;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        pre {
+            background: #1e1e1e;
+            color: #eaeaea;
+            padding: 14px;
+            border-radius: 8px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-size: 12px;
+        }
+
+        .success {
+            color: #006600;
+            font-weight: bold;
+        }
+
+        .error {
+            color: #cc0000;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+            font-size: 13px;
+        }
+
+        th {
+            background: #555;
+            color: white;
+            padding: 8px;
+            border: 1px solid #333;
+        }
+
+        td {
+            padding: 7px;
+            border: 1px solid #bbb;
+            text-align: center;
+        }
+
+        td.left {
+            text-align: left;
+        }
+
+        tr:nth-child(even) td {
+            background: #f7f7f7;
+        }
+
+        a.download {
+            display: inline-block;
+            padding: 6px 10px;
+            background: #2f4f2f;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .small-note {
+            color: #555;
+            font-size: 13px;
+            margin-top: 8px;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .checkboxes {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+<header>
+    <h1>Generador de Reportes INIA</h1>
+    <p>Ejecuta generate_reports_by_district.py desde el navegador y descarga los PDFs generados.</p>
+</header>
+
+<main>
+    <form method="post">
+        <div class="card">
+            <h2>Parámetros</h2>
+
+            <div class="grid">
+                <div>
+                    <label>Distrito</label>
+                    <input name="district" value="{{ request.form.get('district', 'AYAVIRI') }}">
+                </div>
+
+                <div>
+                    <label>Base de datos SQLite</label>
+                    <input name="db" value="{{ request.form.get('db', default_db) }}">
+                </div>
+
+                <div>
+                    <label>Carpeta de salida</label>
+                    <input name="output_dir" value="{{ request.form.get('output_dir', default_output_dir) }}">
+                </div>
+
+                <div>
+                    <label>Extraccion_Nut.csv opcional</label>
+                    <input name="extraction_csv" value="{{ request.form.get('extraction_csv', '') }}" placeholder="config/Extraccion_Nut.csv">
+                </div>
+
+                <div>
+                    <label>fertilizer_conversion_factors.csv opcional</label>
+                    <input name="conversion_factors_csv" value="{{ request.form.get('conversion_factors_csv', '') }}" placeholder="config/fertilizer_conversion_factors.csv">
+                </div>
+
+                <div>
+                    <label>Riqueza_Fert.csv opcional</label>
+                    <input name="riqueza_csv" value="{{ request.form.get('riqueza_csv', '') }}" placeholder="config/Riqueza_Fert.csv">
+                </div>
+
+                <div>
+                    <label>Límite para prueba</label>
+                    <input name="limit" type="number" min="1" value="{{ request.form.get('limit', '') }}" placeholder="Ejemplo: 2">
+                </div>
+            </div>
+
+            <div class="checkboxes">
+                <label>
+                    <input type="checkbox" name="skip_both" {% if request.form.get('skip_both') %}checked{% endif %}>
+                    Generar solo informes técnicos, saltar generate_both_reports.py
+                </label>
+
+                <label>
+                    <input type="checkbox" name="skip_technical" {% if request.form.get('skip_technical') %}checked{% endif %}>
+                    Generar solo reportes combinados, saltar technical_inform_name_cultivo.py
+                </label>
+
+                <label>
+                    <input type="checkbox" name="technical_print_out" {% if request.form.get('technical_print_out') %}checked{% endif %}>
+                    Mostrar tablas técnicas en stdout
+                </label>
+
+                <label>
+                    <input type="checkbox" name="technical_debug" {% if request.form.get('technical_debug') %}checked{% endif %}>
+                    Activar debug técnico
+                </label>
+            </div>
+
+            <button type="submit">Generar reportes</button>
+
+            <p class="small-note">
+                Para probar sin generar todo, usa un límite pequeño, por ejemplo <b>2</b>.
+            </p>
+        </div>
+    </form>
+
+    {% if result %}
+        <div class="card">
+            <h2>Resultado de ejecución</h2>
+
+            {% if result.returncode == 0 %}
+                <p class="success">Proceso terminado correctamente.</p>
+            {% else %}
+                <p class="error">Proceso terminó con error. Código: {{ result.returncode }}</p>
+            {% endif %}
+
+            <h3>Comando ejecutado</h3>
+            <pre>{{ result.command }}</pre>
+
+            <h3>STDOUT</h3>
+            <pre>{{ result.stdout }}</pre>
+
+            <h3>STDERR</h3>
+            <pre>{{ result.stderr }}</pre>
+        </div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Archivos generados</h2>
+
+        {% if files %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Archivo</th>
+                        <th>Tamaño KB</th>
+                        <th>Descargar</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for file in files %}
+                        <tr>
+                            <td class="left">{{ file.name }}</td>
+                            <td>{{ file.size_kb }}</td>
+                            <td>
+                                <a class="download"
+                                   href="{{ url_for('download_file', output_dir=output_dir, filename=file.name) }}">
+                                    Descargar
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No hay archivos generados todavía en:</p>
+            <pre>{{ output_dir }}</pre>
+        {% endif %}
+    </div>
+</main>
+</body>
+</html>
