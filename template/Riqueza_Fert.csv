@@ -1,0 +1,10 @@
+﻿CÓDIGO,TIPO DE FERTILIZANTE,N,P2O5,K2O,CaO,MgO,S,suelos acidos (< 5.5),suelos alcalinos (> 8),neutro
+2,Estiércol de Vacuno,2.73,0.62,0.8,0.33999999999999997,1,0.4,1,1,1
+12,Urea,46,0,0,0,0,0,0,1,1
+13,Nitrato de Amonio,33,3,0,0,0,0,1,0,0
+17,Fosfato Diamónico,18,46,0,0,0,0,1,1,1
+21,Cloruro de Potasio,0,0,60,0,0,0,1,0,1
+22,Sulfato de Potasio,0,0,50,0,0,18,0,1,1
+25,Sulfato de Potasio y Magnesio,0,0,22,0,18,22,0,1,1
+29,Molimax (20-20-20),20,20,20,0,0,0,1,1,1
+32,Molimax (16-16-16),16,16,16,0,0,0,1,1,1
