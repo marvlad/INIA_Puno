@@ -5,6 +5,8 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
+import pandas as pd
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -40,6 +42,10 @@ OUTPUT_DIR = "recommendation_reports"
 PAGE_WIDTH_CM = 19.8
 
 
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
 def normalize_text(value):
     if value is None:
         return ""
@@ -50,6 +56,16 @@ def normalize_text(value):
         c for c in text
         if not unicodedata.combining(c)
     )
+
+    cleaned = []
+
+    for char in text:
+        if char.isalnum() or char.isspace():
+            cleaned.append(char)
+        else:
+            cleaned.append(" ")
+
+    text = "".join(cleaned)
     text = " ".join(text.split())
 
     return text
@@ -60,6 +76,7 @@ def safe_filename(value):
     text = text.replace(" ", "_")
 
     allowed = []
+
     for char in text:
         if char.isalnum() or char in ["_", "-"]:
             allowed.append(char)
@@ -70,6 +87,15 @@ def safe_filename(value):
         text = "reporte"
 
     return text
+
+
+def format_number(value, digits=0):
+    value = value_to_float(value, None)
+
+    if value is None:
+        return ""
+
+    return f"{value:.{digits}f}"
 
 
 def find_column_by_words(fieldnames, words):
@@ -83,6 +109,37 @@ def find_column_by_words(fieldnames, words):
 
     return None
 
+
+def read_csv_flexible(path):
+    encodings = [
+        "utf-8-sig",
+        "utf-8",
+        "latin1",
+    ]
+
+    last_error = None
+
+    for encoding in encodings:
+        try:
+            return pd.read_csv(
+                path,
+                sep=None,
+                engine="python",
+                encoding=encoding,
+                dtype=str,
+            )
+        except Exception as error:
+            last_error = error
+
+    raise RuntimeError(
+        f"Could not read CSV file: {path}\n"
+        f"Last error: {last_error}"
+    )
+
+
+# ============================================================
+# CROP DATA FROM Extraccion_Nut.csv
+# ============================================================
 
 def get_crop_period_months(cultivo, extraction_csv=EXTRACTION_CSV):
     crop_row, fieldnames, crop_col, code_col = find_crop_row(
@@ -110,6 +167,148 @@ def get_crop_period_months(cultivo, extraction_csv=EXTRACTION_CSV):
 
     return period
 
+
+def get_rdto_estimado_from_extraction_csv(
+    cultivo,
+    extraction_csv=EXTRACTION_CSV,
+    default=0.0,
+    debug=False,
+):
+    """
+    Get RDTO ESTIMADO (t/ha) from config/Extraccion_Nut.csv.
+
+    Your CSV has:
+        Nombre Común
+        Rendimiento (kg/ha)
+
+    Example:
+        Nombre Común = ALFALFA
+        Rendimiento (kg/ha) = 70
+
+    In your Excel/report logic, that value is used as t/ha.
+    Therefore this function DOES NOT divide by 1000.
+    """
+
+    path = Path(extraction_csv)
+
+    if not path.exists():
+        print(f"\nERROR: extraction CSV not found: {path.resolve()}")
+        return default
+
+    df = read_csv_flexible(path)
+
+    if df.empty:
+        print(f"\nERROR: extraction CSV is empty: {path.resolve()}")
+        return default
+
+    if debug:
+        print("\nDEBUG RDTO ESTIMADO FROM Extraccion_Nut.csv")
+        print("=" * 90)
+        print(f"File: {path.resolve()}")
+
+        print("\nColumns:")
+        for col in df.columns:
+            print(f"  {col!r} -> {normalize_text(col)!r}")
+
+    crop_col = None
+
+    for col in df.columns:
+        col_norm = normalize_text(col)
+
+        if col_norm in [
+            "nombre comun",
+            "cultivo",
+            "cultivo a instalar",
+            "cultivo variedad",
+            "cultivo y variedad",
+        ]:
+            crop_col = col
+            break
+
+    if crop_col is None:
+        for col in df.columns:
+            col_norm = normalize_text(col)
+
+            if "nombre comun" in col_norm or "cultivo" in col_norm:
+                crop_col = col
+                break
+
+    rendimiento_col = None
+
+    for col in df.columns:
+        col_norm = normalize_text(col)
+
+        if "rendimiento" in col_norm:
+            rendimiento_col = col
+            break
+
+    if crop_col is None:
+        print("\nERROR: Could not find crop column.")
+        print("Expected column like 'Nombre Común'.")
+        print("Available columns:")
+
+        for col in df.columns:
+            print(f"  {col!r}")
+
+        return default
+
+    if rendimiento_col is None:
+        print("\nERROR: Could not find Rendimiento column.")
+        print("Expected column like 'Rendimiento (kg/ha)'.")
+        print("Available columns:")
+
+        for col in df.columns:
+            print(f"  {col!r}")
+
+        return default
+
+    target = normalize_text(cultivo)
+
+    df["_crop_norm_tmp"] = df[crop_col].astype(str).map(normalize_text)
+
+    mask = df["_crop_norm_tmp"].eq(target)
+
+    if not mask.any():
+        mask = df["_crop_norm_tmp"].str.contains(target, na=False)
+
+    if not mask.any():
+        mask = df["_crop_norm_tmp"].apply(
+            lambda x: target in x or x in target
+        )
+
+    if not mask.any():
+        print(f"\nERROR: cultivo={cultivo!r} was not found in {extraction_csv}")
+        print(f"Normalized input cultivo: {target!r}")
+        print("\nAvailable crops:")
+
+        for value in df[crop_col].dropna().unique():
+            print(f"  {value!r} -> {normalize_text(value)!r}")
+
+        return default
+
+    selected_row = df.loc[mask].iloc[0]
+
+    rendimiento_raw = selected_row[rendimiento_col]
+    rendimiento = value_to_float(rendimiento_raw, None)
+
+    if rendimiento is None:
+        print(f"\nERROR: Could not convert rendimiento={rendimiento_raw!r}")
+        return default
+
+    if debug:
+        print("\nMatched crop row:")
+        print(f"  cultivo input        = {cultivo!r}")
+        print(f"  crop matched         = {selected_row[crop_col]!r}")
+        print(f"  rendimiento raw      = {rendimiento_raw!r}")
+        print(f"  RDTO estimado t/ha   = {rendimiento}")
+        print("=" * 90)
+
+    return rendimiento
+
+
+# ============================================================
+# DATABASE LOOKUP
+# ============================================================
 
 def get_row_by_name_and_crop(db_file, name, cultivo):
     db_file = Path(db_file)
@@ -155,6 +354,10 @@ def get_row_by_name_and_crop(db_file, name, cultivo):
     return None
 
 
+# ============================================================
+# REQUIREMENTS AND OPTIMIZER HELPERS
+# ============================================================
+
 def requirements_from_dose_result(dose_result):
     by_symbol = {
         item["nutriente"]: item
@@ -180,20 +383,17 @@ def requirements_from_dose_result(dose_result):
     return requirements
 
 
-def format_number(value, digits=0):
-    value = value_to_float(value, None)
-
-    if value is None:
-        return ""
-
-    return f"{value:.{digits}f}"
-
-
 def get_selected_fertilizers(result):
     selected = []
 
-    for name, dose in zip(result.selected_fertilizers, result.x):
+    selected_names = list(getattr(result, "selected_fertilizers", []))
+    doses = list(getattr(result, "x", []))
+
+    for name, dose in zip(selected_names, doses):
         dose = value_to_float(dose, 0.0)
+
+        if dose is None:
+            dose = 0.0
 
         if dose > 0:
             selected.append({
@@ -203,6 +403,62 @@ def get_selected_fertilizers(result):
             })
 
     return selected
+
+
+def get_optimizer_fertilizer_table(result):
+    fertilizer_table = getattr(result, "fertilizer_table", None)
+
+    if fertilizer_table is None:
+        return {}
+
+    return fertilizer_table
+
+
+def get_row_number(row, possible_keys, default=0.0):
+    for key in possible_keys:
+        if key in row:
+            value = value_to_float(row.get(key), None)
+
+            if value is not None:
+                return value
+
+    return default
+
+
+def get_acidez_aluminio_from_row(row):
+    """
+    Calculate:
+        Al3+ + H+ = Acidez + Aluminio
+    """
+
+    acidez = get_row_number(
+        row,
+        [
+            "acidez",
+            "acidez_intercambiable",
+            "acidez_interc",
+            "acidez_cmol_kg",
+            "acidez_cmolkg",
+            "acidez_cmol",
+        ],
+        default=0.0,
+    )
+
+    aluminio = get_row_number(
+        row,
+        [
+            "aluminio",
+            "aluminio_intercambiable",
+            "al_intercambiable",
+            "al",
+            "aluminio_cmol_kg",
+            "aluminio_cmolkg",
+            "aluminio_cmol",
+        ],
+        default=0.0,
+    )
+
+    return acidez + aluminio
 
 
 def classify_application_time(fertilizer_name):
@@ -238,17 +494,29 @@ def split_fertilizers_by_application(selected_fertilizers):
     return before_sowing, sowing, first_hilling
 
 
+# ============================================================
+# DATA BUILDER
+# ============================================================
+
 def build_recommendation_data(
     row,
     extraction_csv=EXTRACTION_CSV,
     conversion_factors_csv=CONVERSION_FACTORS_CSV,
     riqueza_csv=RIQUEZA_CSV,
+    debug=False,
 ):
     cultivo = row.get("cultivo_a_instalar", "")
 
     permanencia_meses = get_crop_period_months(
         cultivo=cultivo,
         extraction_csv=extraction_csv,
+    )
+
+    rdto_estimado_ton_ha = get_rdto_estimado_from_extraction_csv(
+        cultivo=cultivo,
+        extraction_csv=extraction_csv,
+        default=0.0,
+        debug=debug,
     )
 
     dose_result = calculate_fertilization_dose(
@@ -285,17 +553,24 @@ def build_recommendation_data(
         "row": row,
         "cultivo": cultivo,
         "permanencia_meses": permanencia_meses,
+        "rdto_estimado_ton_ha": rdto_estimado_ton_ha,
         "dose_result": dose_result,
         "requirements": requirements,
         "requirements_used": requirements_used,
         "optimization_result": result,
+        "fertilizer_table": get_optimizer_fertilizer_table(result),
         "supplied": supplied,
         "selected_fertilizers": selected_fertilizers,
         "before_sowing": before_sowing,
         "sowing": sowing,
         "first_hilling": first_hilling,
+        "alh": get_acidez_aluminio_from_row(row),
     }
 
+
+# ============================================================
+# REPORT STYLES
+# ============================================================
 
 def make_styles():
     styles = getSampleStyleSheet()
@@ -352,6 +627,15 @@ def make_styles():
         textColor=colors.blue,
     ))
 
+    styles.add(ParagraphStyle(
+        name="RedTiny",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=8,
+        textColor=colors.red,
+    ))
+
     return styles
 
 
@@ -376,6 +660,10 @@ def section_title(title, styles, width=PAGE_WIDTH_CM * cm):
 
     return table
 
+
+# ============================================================
+# PDF COMPONENTS
+# ============================================================
 
 def make_header(row, data, styles):
     title = Table(
@@ -416,15 +704,15 @@ def make_header(row, data, styles):
         ],
         [
             p("UBICACIÓN PARCELA", styles["TinyBold"]),
-            p(row.get("dist", ""), styles["Tiny"]),
+            p(row.get("dist", row.get("distrito", "")), styles["Tiny"]),
             p("FECHA DE EMISIÓN", styles["TinyBold"]),
             p("-", styles["Tiny"]),
         ],
         [
             p("NOMBRE PARCELA", styles["TinyBold"]),
-            p(row.get("localidad_comunidad_caserio_asociacion_etc", ""), styles["Tiny"]),
+            p(row.get("localidad_comunidad_caserio_asociacion_etc", row.get("nombre_parcela", "")), styles["Tiny"]),
             p("RDTO ESTIMADO (t/ha)", styles["TinyBold"]),
-            p(format_number(data["dose_result"].get("rendimiento_kg_ha", 0), 1), styles["Tiny"]),
+            p(format_number(data["rdto_estimado_ton_ha"], 1), styles["Tiny"]),
         ],
         [
             p("CULTIVO / VAR.", styles["TinyBold"]),
@@ -435,8 +723,8 @@ def make_header(row, data, styles):
         [
             p("CÓDIGO LABORATORIO", styles["TinyBold"]),
             p(row.get("codigo", ""), styles["Tiny"]),
-            p("", styles["TinyBold"]),
-            p("", styles["Tiny"]),
+            p("Al3+H+", styles["TinyBold"]),
+            p(format_number(data["alh"], 2), styles["Tiny"]),
         ],
     ]
 
@@ -467,10 +755,27 @@ def make_header(row, data, styles):
     return [title, info_title, table, Spacer(1, 0.18 * cm)]
 
 
+def nutrient_cell(value, styles):
+    value_float = value_to_float(value, 0.0)
+
+    if value_float is None:
+        value_float = 0.0
+
+    if value_float < 0:
+        return p(format_number(value_float, 0), styles["RedTiny"])
+
+    return p(format_number(value_float, 0), styles["Tiny"])
+
+
 def make_general_recommendation_table(data, styles):
     req = {
         nutrient: value_to_float(value, 0.0)
         for nutrient, value in zip(NUTRIENTS, data["requirements"])
+    }
+
+    req_used = {
+        nutrient: value_to_float(value, 0.0)
+        for nutrient, value in zip(NUTRIENTS, data["requirements_used"])
     }
 
     table_data = [
@@ -483,10 +788,26 @@ def make_general_recommendation_table(data, styles):
         ],
         [
             p(data["cultivo"], styles["Tiny"]),
-            p(format_number(max(req.get("N", 0.0), 0.0), 0), styles["Tiny"]),
-            p(format_number(max(req.get("P2O5", 0.0), 0.0), 0), styles["Tiny"]),
-            p(format_number(max(req.get("K2O", 0.0), 0.0), 0), styles["Tiny"]),
+
+            # IMPORTANT:
+            # Do not force negative values to zero here.
+            # This shows the real final requirement from the calculation.
+            nutrient_cell(req.get("N", 0.0), styles),
+            nutrient_cell(req.get("P2O5", 0.0), styles),
+            nutrient_cell(req.get("K2O", 0.0), styles),
+
             p("No es necesario aplicar cal", styles["Tiny"]),
+        ],
+        [
+            p("Req. usado por optimizador", styles["TinyBold"]),
+            p(format_number(req_used.get("N", 0.0), 0), styles["Tiny"]),
+            p(format_number(req_used.get("P2O5", 0.0), 0), styles["Tiny"]),
+            p(format_number(req_used.get("K2O", 0.0), 0), styles["Tiny"]),
+            p(
+                "Los valores negativos indican que no se recomienda aporte adicional "
+                "de ese nutriente.",
+                styles["Tiny"],
+            ),
         ],
     ]
 
@@ -505,6 +826,7 @@ def make_general_recommendation_table(data, styles):
         ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.black),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#c9c9c9")),
+        ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#eeeeee")),
         ("ALIGN", (1, 0), (3, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -523,6 +845,7 @@ def make_product_table(data, styles):
         [
             p("PRODUCTO COMERCIAL RECOMENDADO", styles["TinyBold"]),
             p("DOSIS (kg/ha)", styles["TinyBold"]),
+            p("SACOS/ha", styles["TinyBold"]),
             p("ÉPOCA DE APLICACIÓN", styles["TinyBold"]),
         ]
     ]
@@ -531,15 +854,17 @@ def make_product_table(data, styles):
         rows.append([
             p(item["name"], styles["Tiny"]),
             p(format_number(item["dose_kg_ha"], 1), styles["Tiny"]),
+            p(format_number(item["sacos_ha"], 1), styles["Tiny"]),
             p(classify_application_time(item["name"]), styles["TinyBold"]),
         ])
 
     table = Table(
         rows,
         colWidths=[
-            8.0 * cm,
-            3.0 * cm,
-            8.8 * cm,
+            7.0 * cm,
+            2.7 * cm,
+            2.2 * cm,
+            7.9 * cm,
         ],
     )
 
@@ -547,7 +872,7 @@ def make_product_table(data, styles):
         ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.black),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#c9c9c9")),
-        ("ALIGN", (1, 0), (1, -1), "CENTER"),
+        ("ALIGN", (1, 0), (2, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
@@ -559,7 +884,7 @@ def make_product_table(data, styles):
 
 
 def make_observations(data, styles):
-    rendimiento = data["dose_result"].get("rendimiento_kg_ha", "")
+    rendimiento = data["rdto_estimado_ton_ha"]
 
     table_data = [
         [p("OBSERVACIONES", styles["SmallBold"])],
@@ -567,7 +892,9 @@ def make_observations(data, styles):
             p(
                 "La dosis de fertilización es de acuerdo a los análisis de suelos, "
                 "demanda nutricional de la planta y un rendimiento proyectado de: "
-                f"<b>{format_number(rendimiento, 1)} t/ha</b>",
+                f"<b>{format_number(rendimiento, 1)} t/ha</b>. "
+                "Cuando un requerimiento final aparece negativo, significa que el "
+                "suelo ya cubre ese nutriente y no se recomienda aporte adicional.",
                 styles["Small"],
             )
         ],
@@ -816,6 +1143,10 @@ def make_dosis_section(data, styles):
     return story
 
 
+# ============================================================
+# PDF CREATOR
+# ============================================================
+
 def create_recommendation_pdf(data, output_pdf):
     styles = make_styles()
 
@@ -861,23 +1192,48 @@ def create_recommendation_pdf(data, output_pdf):
     return output_pdf
 
 
+# ============================================================
+# TERMINAL SUMMARY
+# ============================================================
+
 def print_terminal_summary(data):
     print("\nRECOMENDACIÓN DE FERTILIZACIÓN")
     print("=" * 90)
 
     row = data["row"]
 
-    print(f"Agricultor: {row.get('nombres_y_apellidos', '')}")
-    print(f"Cultivo:    {row.get('cultivo_a_instalar', '')}")
-    print(f"Código:     {row.get('codigo', '')}")
-    print(f"pH:         {row.get('ph', '')}")
+    print(f"Agricultor:              {row.get('nombres_y_apellidos', '')}")
+    print(f"Cultivo:                 {row.get('cultivo_a_instalar', '')}")
+    print(f"Código:                  {row.get('codigo', '')}")
+    print(f"pH:                      {row.get('ph', '')}")
+    print(f"RDTO ESTIMADO (t/ha):    {format_number(data['rdto_estimado_ton_ha'], 1)}")
+    print(f"PERMANENCIA (meses):     {format_number(data['permanencia_meses'], 1)}")
+    print(f"Al3+H+ Acidez+Aluminio:  {format_number(data['alh'], 2)}")
+
+    print("\nRequerimientos finales reales:")
+    print("-" * 90)
+
+    for nutrient, value in zip(NUTRIENTS, data["requirements"]):
+        print(f"{nutrient:5s}: {format_number(value, 2):>12s} kg/ha")
+
+    print("\nRequerimientos usados por el optimizador:")
+    print("-" * 90)
+
+    for nutrient, value in zip(NUTRIENTS, data["requirements_used"]):
+        print(f"{nutrient:5s}: {format_number(value, 2):>12s} kg/ha")
+
+    print("\nAporte calculado por el optimizador:")
+    print("-" * 90)
+
+    for nutrient, value in zip(NUTRIENTS, data["supplied"]):
+        print(f"{nutrient:5s}: {format_number(value, 2):>12s} kg/ha")
 
     print("\nProductos recomendados:")
     print("-" * 90)
 
     for item in data["selected_fertilizers"]:
         print(
-            f"{item['name']:35s} "
+            f"{item['name']:40s} "
             f"{format_number(item['dose_kg_ha'], 1):>10s} kg/ha   "
             f"{format_number(item['sacos_ha'], 1):>8s} sacos/ha   "
             f"{classify_application_time(item['name'])}"
@@ -885,6 +1241,10 @@ def print_terminal_summary(data):
 
     print("-" * 90)
 
+
+# ============================================================
+# CLI
+# ============================================================
 
 def main():
     parser = argparse.ArgumentParser(
@@ -897,10 +1257,17 @@ def main():
     parser.add_argument("--extraction-csv", default=EXTRACTION_CSV)
     parser.add_argument("--conversion-factors-csv", default=CONVERSION_FACTORS_CSV)
     parser.add_argument("--riqueza-csv", default=RIQUEZA_CSV)
+
     parser.add_argument(
         "--output",
         default=None,
         help="Output PDF path. If omitted, an automatic name is used.",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print debug information for crop matching in Extraccion_Nut.csv.",
     )
 
     args = parser.parse_args()
@@ -921,6 +1288,7 @@ def main():
         extraction_csv=args.extraction_csv,
         conversion_factors_csv=args.conversion_factors_csv,
         riqueza_csv=args.riqueza_csv,
+        debug=args.debug,
     )
 
     print_terminal_summary(data)
