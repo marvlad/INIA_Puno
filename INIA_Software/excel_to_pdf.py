@@ -63,7 +63,7 @@ def export_excel_sheets_to_pdf(
             ws = wb.sheets[sheet_name]
 
             # Use landscape because your layout is wide.
-            ws.api.PageSetup.Orientation = 2  # 1 portrait, 2 landscape
+            ws.api.PageSetup.Orientation = 1  # 1 portrait, 2 landscape
 
             # Fit each sheet to one page.
             ws.api.PageSetup.Zoom = False
