@@ -6,7 +6,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from excel_builder import build_excel_from_template
+from excel_builder import (
+    build_excel_from_template,
+    find_header_row,
+    get_headers_from_values,
+    find_person_row,
+    get,
+)
+from openpyxl import load_workbook
 from excel_requirements import get_requirements_with_excel
 from optimizer import (
     optimize_fertilizers,
@@ -113,6 +120,31 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_dist_prov(resultados_excel, name):
+    """Return (DIST, PROV) for this person from the RESULTADOS Excel."""
+    wb = load_workbook(resultados_excel, data_only=True, read_only=True)
+    try:
+        ws = wb.active
+        header_row_number, header_row_values = find_header_row(ws)
+        headers = get_headers_from_values(header_row_values)
+        _, row_values = find_person_row(ws, headers, name, header_row_number)
+        dist = get(row_values, headers, "DIST") or ""
+        prov = get(row_values, headers, "PROV") or ""
+    finally:
+        wb.close()
+    return str(dist).strip(), str(prov).strip()
+
+
+def build_base_name(name, cultivo, dist="", prov=""):
+    """Example: Juan_Perez_PAPA_d-Chucuito_p-Puno"""
+    base_name = f"{safe_filename(name)}_{safe_filename(cultivo)}"
+    if dist:
+        base_name += f"_d-{safe_filename(dist.title())}"
+    if prov:
+        base_name += f"_p-{safe_filename(prov.title())}"
+    return base_name
+
+
 def main():
     args = parse_args()
 
@@ -160,11 +192,11 @@ def main():
         # ------------------------------------------------------------
         # Create central report directory
         # ------------------------------------------------------------
-        report_dir = make_report_directory(
-            args.report_root,
-            args.name,
-            args.cultivo,
-        )
+        dist, prov = get_dist_prov(resultados_excel, args.name)
+        base_name = build_base_name(args.name, args.cultivo, dist, prov)
+
+        report_dir = Path(args.report_root).resolve() / base_name
+        report_dir.mkdir(parents=True, exist_ok=True)
 
         print("=" * 80)
         print("FERTILIZER PIPELINE")
@@ -179,7 +211,7 @@ def main():
         # ------------------------------------------------------------
         # Output files
         # ------------------------------------------------------------
-        base_name = f"{safe_filename(args.name)}_{safe_filename(args.cultivo)}"
+        # base_name was built above (name_cultivo_d-DIST_p-PROV)
 
         filled_excel = report_dir / (
             f"Software_Mejorado_Cultivos_Anuales_2025-2026_Arapa_"
