@@ -76,12 +76,16 @@ def get_records_by_district(db_file, district):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
+        cols = {r["name"] for r in cur.execute(f'PRAGMA table_info("{TABLE_NAME}")')}
+        dist_col = "distrito" if "distrito" in cols else "dist"
+
         query = f"""
             SELECT
                 nombres_y_apellidos,
                 cultivo_a_instalar,
                 codigo,
-                dist
+                "{dist_col}" AS dist,
+                ph
             FROM "{TABLE_NAME}"
             WHERE nombres_y_apellidos IS NOT NULL
               AND cultivo_a_instalar IS NOT NULL
@@ -95,11 +99,20 @@ def get_records_by_district(db_file, district):
 
     filtered = []
     seen = set()
+    skipped_no_results = []
 
     for row in rows:
         row_dist_norm = normalize_text(row.get("dist"))
 
         if row_dist_norm != district_norm:
+            continue
+
+        # Skip samples that have no lab results yet (empty pH).
+        if row.get("ph") is None or str(row.get("ph")).strip() == "":
+            skipped_no_results.append(
+                f"{row.get('nombres_y_apellidos')} / "
+                f"{row.get('cultivo_a_instalar')} / {row.get('codigo')}"
+            )
             continue
 
         name = str(row.get("nombres_y_apellidos", "")).strip()
@@ -123,6 +136,14 @@ def get_records_by_district(db_file, district):
             "codigo": codigo,
             "district": row.get("dist", ""),
         })
+
+    if skipped_no_results:
+        print(
+            f"\nSkipping {len(skipped_no_results)} sample(s) in {district} "
+            f"with no lab results yet (empty pH):"
+        )
+        for item in skipped_no_results:
+            print(f"  - {item}")
 
     return filtered
 
